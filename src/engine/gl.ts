@@ -221,11 +221,19 @@ vec3 linearToSrgb(vec3 c) {
  * Fill layers and the brush use this to sample user texture sets.
  */
 export const GLSL_MAPS = /* glsl */ `
+uniform sampler2D uMeshC;   // UV tangent frame (see MeshMaps)
+void tangentFrame(vec2 uv, vec3 n, out vec3 T, out vec3 B) {
+  vec4 c = texture(uMeshC, uv);
+  T = normalize(c.xyz * 2.0 - 1.0);
+  B = normalize(cross(n, T)) * (c.w > 0.5 ? 1.0 : -1.0);
+}
 uniform sampler2D uMapC;
 uniform sampler2D uMapR;
 uniform sampler2D uMapM;
 uniform sampler2D uMapH;
+uniform sampler2D uMapN;
 uniform vec4 uMapOn;      // color, rough, metal, height
+uniform vec3 uMapNrm;     // normal map on, DirectX convention, lod
 uniform vec4 uMapLod;
 uniform ivec4 uMapChan;   // component index for -, rough, metal, height
 uniform vec2 uMapParams;  // tiling, gloss
@@ -233,7 +241,34 @@ vec4 triSample(sampler2D t, vec3 p, vec3 w, float lod) {
   return textureLod(t, p.zy, lod) * w.x + textureLod(t, p.xz, lod) * w.y + textureLod(t, p.xy, lod) * w.z;
 }
 float chanOf(vec4 v, int c) { return c == 0 ? v.r : (c == 1 ? v.g : (c == 2 ? v.b : v.a)); }
-bool anyMap() { return dot(uMapOn, vec4(1.0)) > 0.5; }
+bool anyMap() { return dot(uMapOn, vec4(1.0)) + uMapNrm.x > 0.5; }
+
+vec3 unpackNormal(vec4 t) {
+  vec3 n = t.xyz * 2.0 - 1.0;
+  // Images are stored top row first, so +v points down the image. OpenGL maps have green = up (−v) and
+  // need flipping; DirectX maps already have green = down (+v).
+  if (uMapNrm.y < 0.5) n.y = -n.y;
+  return n;
+}
+
+/**
+ * Triplanar tangent-space normal map → world space (whiteout blend, per projection plane), then into the
+ * texel's UV tangent frame (T, B, N). Returns the tangent-space xy perturbation.
+ */
+vec2 sampleNormalMap(vec3 pos, vec3 n, vec3 T, vec3 B) {
+  vec3 w = pow(abs(n), vec3(4.0));
+  w /= max(w.x + w.y + w.z, 1e-5);
+  vec3 p = pos * uMapParams.x;
+  float lod = uMapNrm.z;
+  vec3 tx = unpackNormal(textureLod(uMapN, p.zy, lod));
+  vec3 ty = unpackNormal(textureLod(uMapN, p.xz, lod));
+  vec3 tz = unpackNormal(textureLod(uMapN, p.xy, lod));
+  tx = vec3(tx.xy + n.zy, tx.z * n.x);
+  ty = vec3(ty.xy + n.xz, ty.z * n.y);
+  tz = vec3(tz.xy + n.xy, tz.z * n.z);
+  vec3 wn = normalize(tx.zyx * w.x + ty.xzy * w.y + tz.xyz * w.z);
+  return vec2(dot(wn, T), dot(wn, B));
+}
 void sampleMaps(vec3 pos, vec3 n, inout vec3 col, inout float r, inout float m, inout float h) {
   vec3 w = pow(abs(n), vec3(4.0));
   w /= max(w.x + w.y + w.z, 1e-5);

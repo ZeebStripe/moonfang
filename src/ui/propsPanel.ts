@@ -6,7 +6,7 @@ import { checkbox, colorField, h, iconButton, section, selectField, slider } fro
 import { ICONS } from './icons';
 import { brushTipControls, stencilControls } from './brushUI';
 
-const CHANNEL_LABELS: Record<ChannelKey, string> = { color: 'Base Color', roughness: 'Roughness', metallic: 'Metallic', height: 'Height' };
+const CHANNEL_LABELS: Record<ChannelKey, string> = { color: 'Base Color', roughness: 'Roughness', metallic: 'Metallic', height: 'Height', normal: 'Normal' };
 
 /** Channel toggles + values (shared by the brush and fill layers). Textured channels show their map instead. */
 function channelEditor(
@@ -50,6 +50,11 @@ function channelEditor(
     'height',
     texChip('height') ??
       slider('Height', { value: values.height, min: 0, max: 1, onInput: (v) => ((values.height = v), onChange()), title: '0.5 = flat, above raises, below carves' }),
+  );
+  add(
+    'normal',
+    texChip('normal') ??
+      h('div', { class: 'field', title: 'Without a normal map this writes a flat normal, which erases normal detail below' }, h('label', {}, 'Normal'), h('span', { class: 'dim small' }, 'flat (no map)')),
   );
   return h('div', { class: 'channels' }, ...rows);
 }
@@ -129,7 +134,7 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
     const parts: (HTMLElement | null)[] = [
       opacity,
       selectField('Blend (color)', BLEND_MODES.map((m) => [m, m[0].toUpperCase() + m.slice(1)] as const), l.blend, (v) => ((l.blend = v), commit())),
-      selectField('Blend (height)', [['add', 'Add (relative)'], ['normal', 'Replace']] as const, l.heightBlend, (v) => ((l.heightBlend = v), commit())),
+      selectField('Blend (height/normal)', [['add', 'Add (relative)'], ['normal', 'Replace']] as const, l.heightBlend, (v) => ((l.heightBlend = v), commit())),
     ];
     if (l.kind === 'fill') {
       parts.push(
@@ -200,7 +205,7 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
     const prev = app.brush.channels;
     const prevOpacity = app.brush.opacity;
     app.part = 'content';
-    app.brush.channels = { color: true, roughness: true, metallic: true, height: true };
+    app.brush.channels = { color: true, roughness: true, metallic: true, height: true, normal: true };
     app.brush.opacity = 1;
     app.fillSelected(true);
     app.brush.channels = prev;

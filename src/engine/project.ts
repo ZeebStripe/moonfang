@@ -148,6 +148,12 @@ export function restoreLayers(renderer: THREE.WebGLRenderer, copier: Copier, p: 
     if (s.kind === 'paint') {
       const rt = createPaintRT(size);
       const tex = s.data.map(upload);
+      // Projects saved before the normal channel have three paint targets; the fourth starts empty.
+      while (tex.length < rt.textures.length) {
+        const t = new THREE.DataTexture(new Uint8Array(size * size * 4), size, size, THREE.RGBAFormat, THREE.UnsignedByteType);
+        t.needsUpdate = true;
+        tex.push(t);
+      }
       copier.copy(renderer, tex, rt);
       tex.forEach((t) => t.dispose());
       const { data: _d, mask: _m, ...rest } = s;

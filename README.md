@@ -5,7 +5,7 @@ It runs in the browser (WebGL2) and is built with TypeScript and three.js.
 
 ## Features (v0.1)
 
-- **Projection painting** onto the 3D model across every PBR channel at once: base color, roughness, metallic and height. It paints across UV seams and is occlusion-aware, so strokes never bleed onto hidden surfaces. It also fades out at grazing angles.
+- **Projection painting** onto the 3D model across every PBR channel at once: base color, roughness, metallic, height and normal. Normal detail is combined with the normal derived from height, and normal maps are projected triplanar, then converted into each texel's UV tangent frame (baked as a mesh map). It paints across UV seams and is occlusion-aware, so strokes never bleed onto hidden surfaces. It also fades out at grazing angles.
 - **Brush**: size, hardness, opacity, spacing, pen pressure (size and/or opacity), per-channel toggles and an eraser.
   - **Tips**: round, square, splatter, grunge, scratches, star and leaf, plus imported images (dark-on-light images are inverted automatically). Tips have an angle and can follow the stroke direction.
   - **Dynamics**: size, angle and opacity jitter, scatter, and lazy-mouse smoothing.
@@ -27,7 +27,7 @@ It runs in the browser (WebGL2) and is built with TypeScript and three.js.
 - **Materials**: 27 PBR presets, with rendered thumbnails, that you can use on the brush or add as fill layers.
 - **Smart materials**: Worn Painted Steel, Military Paint, Rusty Iron, Weathered Copper, Scuffed Plastic, Antique Gold and Dusty Concrete. Each is a stack of fill layers driven by generators.
 - **Your own materials**, via **Library ▾** in the shelf or drag & drop:
-  - Import **PBR texture sets** (for example from ambientCG or Poly Haven). Maps are detected from file names: `BaseColor/Albedo/Diffuse`, `Roughness` (or `Gloss`, which is inverted), `Metallic`, `Height/Displacement`, and packed `ARM/ORM`.
+  - Import **PBR texture sets** (for example from ambientCG or Poly Haven). Maps are detected from file names: `BaseColor/Albedo/Diffuse`, `Roughness` (or `Gloss`, which is inverted), `Metallic`, `Height/Displacement`, `Normal` (OpenGL, or DirectX when the name contains `DX`), and packed `ARM/ORM`.
   - Textured materials are projected **triplanar** in object space, so they are seamless across UV seams. You can paint with them or use them as fill layers, with adjustable tiling and a color tint.
   - Save a fill layer as a material, or a set of fill layers (with their generator masks) as a **smart material**.
   - Your library is stored in the browser (IndexedDB). Export or import it as `.oplib` (a zip with the images) or as plain `.json`. Projects embed the textures they use.
@@ -124,7 +124,7 @@ All painting and compositing runs on the GPU in **texture space**.
 - One texture set per model. Multi-material models are merged into one UV space.
 - No baking from a high-poly mesh yet. Curvature and AO come from the low-poly mesh, so edges need actual bevels for edge wear.
 - Missing so far: an emissive/opacity channel, an anchor/filter system, a 2D UV view, and undo for layer operations (undo only covers strokes and fills).
-- Texture sets: normal maps are skipped, because layers carry height rather than normals; use the set's height map. `.sbsar` procedural material files can't be imported, since they need a proprietary engine.
+- `.sbsar` procedural material files can't be imported, since they need a proprietary engine.
 - PNG export is 8-bit, so there is no 16-bit height or EXR output yet.
 - WebGL2 with `EXT_color_buffer_float` is required. That covers any recent desktop browser.
 

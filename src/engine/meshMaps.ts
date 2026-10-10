@@ -17,6 +17,7 @@ export const DEFAULT_BAKE: BakeSettings = { aoSamples: 128, aoDistance: 0.6, cur
  *  - maps (MRT, dilated):
  *      [0] meshA: rgb = position normalised to the bounding box (per axis), a = ambient occlusion
  *      [1] meshB: rgb = world normal * 0.5 + 0.5, a = curvature (0.5 flat, >0.5 convex)
+ *      [2] meshC: rgb = UV tangent (dP/du) * 0.5 + 0.5, a = bitangent handedness (1 = right-handed)
  */
 export class MeshMaps {
   size = 0;
@@ -58,10 +59,17 @@ export class MeshMaps {
   private rawMat = rawMaterial(
     `in vec3 vPos; in vec3 vNormal; in float vCurv;
      uniform vec3 uMin; uniform vec3 uSize;
-     layout(location = 0) out vec4 o0; layout(location = 1) out vec4 o1;
+     layout(location = 0) out vec4 o0; layout(location = 1) out vec4 o1; layout(location = 2) out vec4 o2;
      void main(){
+       vec3 n = normalize(vNormal);
        o0 = vec4((vPos - uMin) / uSize, 1.0);
-       o1 = vec4(normalize(vNormal) * 0.5 + 0.5, vCurv);
+       o1 = vec4(n * 0.5 + 0.5, vCurv);
+       // Rasterising in UV space, screen x/y are u/v: the derivatives are the per-triangle tangent frame,
+       // the same one three.js derives when it renders normal maps without tangent attributes.
+       vec3 dpdu = dFdx(vPos), dpdv = dFdy(vPos);
+       vec3 t = normalize(dpdu - n * dot(n, dpdu));
+       float hand = dot(cross(n, t), dpdv) < 0.0 ? 0.0 : 1.0;
+       o2 = vec4(t * 0.5 + 0.5, hand);
      }`,
     { uMin: { value: new THREE.Vector3() }, uSize: { value: new THREE.Vector3() } },
     { vertex: UV_SPACE_VERT, defines: { USE_CURV: 1 } },
@@ -113,8 +121,8 @@ export class MeshMaps {
 
   private combineMat = rawMaterial(
     `in vec2 vUv;
-     uniform sampler2D uRaw0; uniform sampler2D uRaw1; uniform sampler2D uAo; uniform sampler2D uCov; uniform sampler2D uSeeds;
-     layout(location = 0) out vec4 o0; layout(location = 1) out vec4 o1;
+     uniform sampler2D uRaw0; uniform sampler2D uRaw1; uniform sampler2D uRaw2; uniform sampler2D uAo; uniform sampler2D uCov; uniform sampler2D uSeeds;
+     layout(location = 0) out vec4 o0; layout(location = 1) out vec4 o1; layout(location = 2) out vec4 o2;
      vec2 remap(vec2 uv){ if (texture(uCov, uv).r > 0.5) return uv; vec4 s = texture(uSeeds, uv); return s.x < 0.0 ? uv : s.xy; }
      void main(){
        vec2 u = remap(vUv);
@@ -122,8 +130,9 @@ export class MeshMaps {
        float ao = a.g > 1e-5 ? a.r / a.g : 1.0;
        o0 = vec4(texture(uRaw0, u).xyz, ao);
        o1 = texture(uRaw1, u);
+       o2 = texture(uRaw2, u);
      }`,
-    { uRaw0: { value: null }, uRaw1: { value: null }, uAo: { value: null }, uCov: { value: null }, uSeeds: { value: null } },
+    { uRaw0: { value: null }, uRaw1: { value: null }, uRaw2: { value: null }, uAo: { value: null }, uCov: { value: null }, uSeeds: { value: null } },
   );
 
   constructor(
@@ -173,7 +182,7 @@ export class MeshMaps {
     this.extentRatio.set(ext.x / maxExt, ext.y / maxExt, ext.z / maxExt);
     this.bboxMin.copy(bb.min);
     this.bboxSize.copy(ext);
-    const raw = createRT(size, size, { type: THREE.HalfFloatType, count: 2 });
+    const raw = createRT(size, size, { type: THREE.HalfFloatType, count: 3 });
     clearTarget(r, raw, 0.5, 0.5, 0.5, 1);
     this.rawMat.uniforms.uMin.value.copy(bb.min);
     this.rawMat.uniforms.uSize.value.copy(ext);
@@ -218,10 +227,11 @@ export class MeshMaps {
     const c = this.combineMat.uniforms;
     c.uRaw0.value = raw.textures[0];
     c.uRaw1.value = raw.textures[1];
+    c.uRaw2.value = raw.textures[2];
     c.uAo.value = aoAcc.texture;
     c.uCov.value = this.coverage.texture;
     c.uSeeds.value = this.seeds.texture;
-    this.maps = createRT(size, size, { type: THREE.HalfFloatType, count: 2, linear: true });
+    this.maps = createRT(size, size, { type: THREE.HalfFloatType, count: 3, linear: true });
     this.fs.render(r, this.combineMat, this.maps);
     raw.dispose();
     aoAcc.dispose();
@@ -235,6 +245,9 @@ export class MeshMaps {
   }
   get meshBTex(): THREE.Texture {
     return this.maps.textures[1];
+  }
+  get meshCTex(): THREE.Texture {
+    return this.maps.textures[2];
   }
 
   dispose() {

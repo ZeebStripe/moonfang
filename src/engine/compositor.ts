@@ -55,9 +55,11 @@ uniform int uKind;         // 0 = paint, 1 = fill
 uniform sampler2D uL0;
 uniform sampler2D uL1;
 uniform sampler2D uL2;
+uniform sampler2D uL3;
 uniform vec3 uFillColor;
 uniform vec3 uFillVals;    // rough, metal, height
 uniform vec4 uFillEnable;  // color, rough, metal, height
+uniform float uFillNormal; // normal channel enabled
 uniform vec3 uVariation;   // amount, scale, seed
 uniform float uOpacity;
 uniform int uBlend;
@@ -80,14 +82,23 @@ void main() {
   vec4 a1 = texture(uAcc1, vUv);
   float m = computeMask(vUv) * uOpacity;
 
-  vec3 col; float colA, r, rA, mt, mtA, h, hA;
+  vec3 col; float colA, r, rA, mt, mtA, h, hA, nA;
+  vec2 nrm = vec2(0.0);
   if (uKind == 0) {
-    vec4 l0 = texture(uL0, vUv), l1 = texture(uL1, vUv), l2 = texture(uL2, vUv);
+    vec4 l0 = texture(uL0, vUv), l1 = texture(uL1, vUv), l2 = texture(uL2, vUv), l3 = texture(uL3, vUv);
     col = l0.rgb; colA = l0.a; r = l1.r; rA = l1.g; mt = l1.b; mtA = l1.a; h = l2.r; hA = l2.g;
+    nrm = l3.xy * 2.0 - 1.0; nA = l3.z;
   } else {
     vec3 pos = texture(uMeshA, vUv).xyz * uExtentRatio;
+    vec3 wn = normalize(texture(uMeshB, vUv).xyz * 2.0 - 1.0);
     col = uFillColor; r = uFillVals.x; mt = uFillVals.y; h = uFillVals.z;
-    if (anyMap()) sampleMaps(pos, normalize(texture(uMeshB, vUv).xyz * 2.0 - 1.0), col, r, mt, h);
+    if (anyMap()) sampleMaps(pos, wn, col, r, mt, h);
+    if (uMapNrm.x > 0.5) {
+      vec3 T, B;
+      tangentFrame(vUv, wn, T, B);
+      nrm = sampleNormalMap(pos, wn, T, B);
+    }
+    nA = uFillNormal;
     float n = 0.0;
     if (uVariation.x > 0.0) n = (fbm(pos * uVariation.y + uVariation.z) - 0.5) * uVariation.x;
     col = clamp(col * (1.0 + n * 1.2), 0.0, 1.0);
@@ -100,8 +111,11 @@ void main() {
   float outR = mix(a1.r, r, rA * m);
   float outM = mix(a1.g, mt, mtA * m);
   float outH = uHeightBlend == 1 ? mix(a1.b, h, hA * m) : clamp(a1.b + (h - 0.5) * hA * m, 0.0, 1.0);
-  o0 = vec4(outCol, 1.0);
-  o1 = vec4(outR, outM, outH, 1.0);
+  // Normal detail (tangent xy): "add" combines with what is below (UDN-style), "normal" replaces it.
+  vec2 below = vec2(a0.a, a1.a);
+  vec2 outN = uHeightBlend == 1 ? mix(below, nrm, nA * m) : below + nrm * nA * m;
+  o0 = vec4(outCol, outN.x);
+  o1 = vec4(outR, outM, outH, outN.y);
 }
 `;
 
@@ -135,7 +149,8 @@ void main() {
 const DEFAULTS_FRAG = /* glsl */ `
 layout(location = 0) out vec4 o0;
 layout(location = 1) out vec4 o1;
-void main() { o0 = vec4(0.5, 0.5, 0.5, 1.0); o1 = vec4(0.5, 0.0, 0.5, 1.0); }
+// Alpha channels carry the accumulated normal detail (tangent xy, 0 = flat).
+void main() { o0 = vec4(0.5, 0.5, 0.5, 0.0); o1 = vec4(0.5, 0.0, 0.5, 0.0); }
 `;
 
 /** Final pass: sRGB→linear base color, ORM packing, height→normal, and UV padding through the jump-flood seeds. */
@@ -166,7 +181,13 @@ void main() {
   float ao = mix(1.0, texture(uMeshA, u).a, uAoStrength);
   float dx = (hAt(vUv + vec2(uTexel.x, 0.0)) - hAt(vUv - vec2(uTexel.x, 0.0))) * 0.5 / uTexel.x;
   float dy = (hAt(vUv + vec2(0.0, uTexel.y)) - hAt(vUv - vec2(0.0, uTexel.y))) * 0.5 / uTexel.y;
-  vec3 n = normalize(vec3(-dx * uNormalK, -dy * uNormalK, 1.0));
+  vec3 nh = normalize(vec3(-dx * uNormalK, -dy * uNormalK, 1.0));
+  // Detail normal from the normal channel, combined with the height normal (whiteout blend).
+  vec2 dxy = vec2(texture(uAcc0, u).a, a1.a);
+  float l2 = dot(dxy, dxy);
+  if (l2 > 0.998) dxy *= sqrt(0.998 / l2);
+  vec3 nd = vec3(dxy, sqrt(1.0 - dot(dxy, dxy)));
+  vec3 n = normalize(vec3(nh.xy + nd.xy, nh.z * nd.z));
   o0 = vec4(srgbToLinear(col), 1.0);
   o1 = vec4(ao, a1.r, a1.g, a1.b);
   o2 = vec4(n * 0.5 + 0.5, 1.0);
@@ -201,6 +222,8 @@ export class Compositor {
     uL0: { value: null },
     uL1: { value: null },
     uL2: { value: null },
+    uL3: { value: null },
+    uFillNormal: { value: 0 },
     uFillColor: { value: new THREE.Vector3() },
     uFillVals: { value: new THREE.Vector3() },
     uFillEnable: { value: new THREE.Vector4() },
@@ -301,16 +324,19 @@ export class Compositor {
       u.uL0.value = layer.rt.textures[0];
       u.uL1.value = layer.rt.textures[1];
       u.uL2.value = layer.rt.textures[2];
+      u.uL3.value = layer.rt.textures[3];
     } else {
       u.uKind.value = 1;
-      u.uL0.value = u.uL1.value = u.uL2.value = this.dummy;
+      u.uL0.value = u.uL1.value = u.uL2.value = u.uL3.value = this.dummy;
       const v = layer.values;
       u.uFillColor.value.set(v.color[0], v.color[1], v.color[2]);
       u.uFillVals.value.set(v.roughness, v.metallic, v.height);
       const c = layer.channels;
       u.uFillEnable.value.set(+c.color, +c.roughness, +c.metallic, +c.height);
+      u.uFillNormal.value = c.normal ? 1 : 0;
       u.uVariation.value.set(layer.variation, layer.variationScale, layer.seed);
       setMapUniforms(u, layer.maps, layer.tiling, store, this.size);
+      u.uMeshC.value = maps.meshCTex;
     }
     this.setMaskUniforms(this.layerMat, layer, maps);
     this.fs.render(this.renderer, this.layerMat, dst);

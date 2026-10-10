@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { clearTarget, createRT } from './gl';
 
-export type ChannelKey = 'color' | 'roughness' | 'metallic' | 'height';
-export const CHANNELS: ChannelKey[] = ['color', 'roughness', 'metallic', 'height'];
+export type ChannelKey = 'color' | 'roughness' | 'metallic' | 'height' | 'normal';
+export const CHANNELS: ChannelKey[] = ['color', 'roughness', 'metallic', 'height', 'normal'];
 export type ChannelSet = Record<ChannelKey, boolean>;
 
 export interface MaterialValues {
@@ -20,12 +20,16 @@ export interface MaterialMaps {
   roughness?: string;
   metallic?: string;
   height?: string;
+  /** tangent-space normal map */
+  normal?: string;
+  /** the normal map uses the DirectX convention (green = −Y) */
+  normalDX?: boolean;
   /** the roughness map is actually a gloss/smoothness map */
   gloss?: boolean;
   /** which component (0 = R … 3 = A) to read, for packed maps such as ARM/ORM */
   channels?: { roughness?: number; metallic?: number; height?: number };
 }
-export const MAP_KEYS = ['color', 'roughness', 'metallic', 'height'] as const;
+export const MAP_KEYS = ['color', 'roughness', 'metallic', 'height', 'normal'] as const;
 
 export function hasMaps(m: MaterialMaps | null | undefined): m is MaterialMaps {
   return !!m && MAP_KEYS.some((k) => !!m[k]);
@@ -81,7 +85,7 @@ interface LayerBase {
 
 export interface PaintLayer extends LayerBase {
   kind: 'paint';
-  /** MRT x3 RGBA8: [0] color.rgb + alpha, [1] rough, roughA, metal, metalA, [2] height, heightA */
+  /** MRT x4 RGBA8: [0] color.rgb + alpha, [1] rough, roughA, metal, metalA, [2] height, heightA, [3] normal.xy, normalA */
   rt: THREE.WebGLRenderTarget;
 }
 
@@ -166,8 +170,9 @@ export function defaultGenerator(type: GenType): GeneratorParams {
   }
 }
 
+/** [0] color.rgb + a, [1] rough, roughA, metal, metalA, [2] height, heightA, [3] normal.xy (0.5 = flat), normalA */
 export function createPaintRT(size: number): THREE.WebGLRenderTarget {
-  return createRT(size, size, { count: 3 });
+  return createRT(size, size, { count: 4 });
 }
 
 export function createMaskRT(renderer: THREE.WebGLRenderer, size: number, value: number): THREE.WebGLRenderTarget {
@@ -193,7 +198,8 @@ export function createFillLayer(name: string, values: MaterialValues, channels?:
     heightBlend: 'add',
     mask: null,
     values: { ...values, color: [...values.color] as [number, number, number] },
-    channels: { color: true, roughness: true, metallic: true, height: true, ...channels },
+    // Normal is opt-in: a fill without a normal map would otherwise flatten the details below it.
+    channels: { color: true, roughness: true, metallic: true, height: true, normal: false, ...channels },
     variation: 0,
     variationScale: 6,
     seed: Math.random() * 100,

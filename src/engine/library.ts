@@ -103,6 +103,9 @@ export function mapUniforms(): Record<string, THREE.IUniform> {
     uMapR: { value: null },
     uMapM: { value: null },
     uMapH: { value: null },
+    uMapN: { value: null },
+    uMeshC: { value: null },
+    uMapNrm: { value: new THREE.Vector3() },
     uMapOn: { value: new THREE.Vector4() },
     uMapLod: { value: new THREE.Vector4() },
     uMapChan: { value: new THREE.Vector4() },
@@ -148,6 +151,11 @@ export function setMapUniforms(
   const ch = maps?.channels ?? {};
   u.uMapChan.value.set(0, ch.roughness ?? 0, ch.metallic ?? 0, ch.height ?? 0);
   u.uMapParams.value.set(tiling, maps?.gloss ? 1 : 0);
+  const nt = store.get(maps?.normal);
+  u.uMapN.value = nt ?? dummyTex;
+  const nimg = nt?.image as { width: number; height: number } | undefined;
+  const nlod = nimg ? Math.max(0, Math.log2((Math.max(nimg.width, nimg.height) * tiling) / (outSize * 0.5))) : 0;
+  u.uMapNrm.value.set(nt ? 1 : 0, maps?.normalDX ? 1 : 0, nlod);
 }
 
 // ------------------------------------------------------------------------------------------ texture sets
@@ -195,8 +203,8 @@ export async function importTextureSet(files: { name: string; bytes: Uint8Array 
   const channels: Record<string, number> = {};
   for (const f of files) {
     const slot = classifyTextureName(f.name);
-    if (slot === 'normal' || slot === 'ao' || slot === 'other') {
-      skipped.push(`${f.name} (${slot === 'other' ? 'unrecognised' : slot === 'normal' ? 'normal maps not supported yet — use a height map' : 'AO comes from the mesh bake'})`);
+    if (slot === 'ao' || slot === 'other') {
+      skipped.push(`${f.name} (${slot === 'other' ? 'unrecognised' : 'AO comes from the mesh bake'})`);
       continue;
     }
     const asset = await makeAsset(f.name, f.bytes);
@@ -210,6 +218,11 @@ export async function importTextureSet(files: { name: string; bytes: Uint8Array 
         maps.metallic = asset.id;
         channels.metallic = 2;
       }
+    } else if (slot === 'normal') {
+      // Poly Haven names them *_nor_gl / *_nor_dx; others use "NormalDX" / "Normal_DirectX".
+      if (maps.normal && !/(^|[^a-z])(gl|opengl)([^a-z]|$)/i.test(f.name)) continue;
+      maps.normal = asset.id;
+      maps.normalDX = /normaldx|(^|[^a-z])(dx|directx)([^a-z]|$)/i.test(f.name.replace(/\.[^.]+$/, ''));
     } else if (slot === 'gloss') {
       maps.roughness = asset.id;
       maps.gloss = true;

@@ -190,10 +190,13 @@ in vec2 vUv;
 layout(location = 0) out vec4 o0;
 layout(location = 1) out vec4 o1;
 layout(location = 2) out vec4 o2;
+layout(location = 3) out vec4 o3;
 uniform sampler2D uS0;
 uniform sampler2D uS1;
 uniform sampler2D uS2;
+uniform sampler2D uS3;
 uniform sampler2D uStroke;
+uniform float uEnN;
 uniform float uOpacity;
 uniform vec3 uColor;
 uniform vec3 uVals;
@@ -215,12 +218,19 @@ vec2 chan(float v, float a, float bv, float k) {
 }
 void main() {
   float m = texture(uStroke, vUv).r * uOpacity;
-  vec4 s0 = texture(uS0, vUv), s1 = texture(uS1, vUv), s2 = texture(uS2, vUv);
+  vec4 s0 = texture(uS0, vUv), s1 = texture(uS1, vUv), s2 = texture(uS2, vUv), s3 = texture(uS3, vUv);
   vec3 bc = uColor;
   vec3 bv = uVals;
+  vec2 bn = vec2(0.0);   // flat unless the brush material has a normal map
   if (anyMap() && m > 0.0) {
     vec4 ma = texture(uMeshA, vUv);
-    sampleMaps(ma.xyz * uExtentRatio, normalize(texture(uMeshB, vUv).xyz * 2.0 - 1.0), bc, bv.x, bv.y, bv.z);
+    vec3 wn = normalize(texture(uMeshB, vUv).xyz * 2.0 - 1.0);
+    sampleMaps(ma.xyz * uExtentRatio, wn, bc, bv.x, bv.y, bv.z);
+    if (uMapNrm.x > 0.5) {
+      vec3 T, B;
+      tangentFrame(vUv, wn, T, B);
+      bn = sampleNormalMap(ma.xyz * uExtentRatio, wn, T, B);
+    }
   }
   if (uStencilOn == 1 && uStencilColor == 1 && m > 0.0) {
     // Decal: look up the stencil color at the screen position this texel projects to.
@@ -239,6 +249,10 @@ void main() {
   }
   o1 = vec4(chan(s1.r, s1.g, bv.x, m * uEn.y), chan(s1.b, s1.a, bv.y, m * uEn.z));
   o2 = vec4(chan(s2.r, s2.g, bv.z, m * uEn.w), 0.0, 1.0);
+  float kn = m * uEnN;
+  vec2 nx = chan(s3.x, s3.z, bn.x * 0.5 + 0.5, kn);
+  vec2 ny = chan(s3.y, s3.z, bn.y * 0.5 + 0.5, kn);
+  o3 = vec4(nx.x, ny.x, nx.y, 1.0);
 }
 `;
 
@@ -305,6 +319,8 @@ export class Painter {
     uS0: { value: null },
     uS1: { value: null },
     uS2: { value: null },
+    uS3: { value: null },
+    uEnN: { value: 0 },
     uStroke: { value: null },
     uOpacity: { value: 1 },
     uColor: { value: new THREE.Vector3() },
@@ -462,6 +478,8 @@ export class Painter {
       p.uS0.value = this.snapshot.textures[0];
       p.uS1.value = this.snapshot.textures[1];
       p.uS2.value = this.snapshot.textures[2];
+      p.uS3.value = this.snapshot.textures[3];
+      p.uEnN.value = b.channels.normal ? 1 : 0;
       p.uStroke.value = this.strokeRT.texture;
       p.uOpacity.value = b.opacity;
       p.uColor.value.set(...b.values.color);
@@ -471,6 +489,7 @@ export class Painter {
       if (this.maps && this.store) {
         p.uMeshA.value = this.maps.meshATex;
         p.uMeshB.value = this.maps.meshBTex;
+        p.uMeshC.value = this.maps.meshCTex;
         p.uExtentRatio.value.copy(this.maps.extentRatio);
         p.uBBoxMin.value.copy(this.maps.bboxMin);
         p.uBBoxSize.value.copy(this.maps.bboxSize);

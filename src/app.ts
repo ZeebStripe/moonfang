@@ -77,7 +77,7 @@ export class App {
     pressureSize: true,
     pressureOpacity: false,
     values: { color: [0.8, 0.8, 0.78], roughness: 0.45, metallic: 0, height: 0.5 },
-    channels: { color: true, roughness: true, metallic: true, height: false },
+    channels: { color: true, roughness: true, metallic: true, height: false, normal: false },
     maps: null,
     tiling: 4,
     materialName: 'Custom',
@@ -334,6 +334,7 @@ export class App {
       l.maps = cloneMaps(preset.maps);
       l.tiling = preset.tiling ?? 4;
       l.channels.height = !!preset.maps.height || preset.values.height !== 0.5;
+      l.channels.normal = !!preset.maps.normal;
     }
     this.insertAboveSelected(l);
   }
@@ -357,6 +358,7 @@ export class App {
       if (maps) {
         l.maps = cloneMaps(maps);
         l.tiling = spec.tiling ?? preset?.tiling ?? 4;
+        if (maps.normal && spec.channels?.normal === undefined) l.channels.normal = true;
       }
       if (spec.variationScale) l.variationScale = spec.variationScale;
       if (spec.opacity !== undefined) l.opacity = spec.opacity;
@@ -506,6 +508,7 @@ export class App {
     this.brush.materialName = p.name;
     this.brush.channels.color = this.brush.channels.roughness = this.brush.channels.metallic = true;
     this.brush.channels.height = !!p.maps?.height || p.values.height !== 0.5;
+    this.brush.channels.normal = !!p.maps?.normal;
     this.emit('brush');
   }
 
