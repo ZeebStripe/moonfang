@@ -109,15 +109,20 @@ export function iconButton(svg: string, title: string, onClick: (e: MouseEvent) 
 }
 
 /** Opens a file picker and resolves with the chosen file (or null). */
-export function pickFile(accept: string): Promise<File | null> {
+export async function pickFile(accept: string): Promise<File | null> {
+  return (await pickFiles(accept, false))[0] ?? null;
+}
+
+/** Opens a file picker and resolves with the chosen files (empty when cancelled). */
+export function pickFiles(accept: string, multiple = true): Promise<File[]> {
   return new Promise((resolve) => {
-    const input = h('input', { type: 'file', accept, style: { display: 'none' } }) as HTMLInputElement;
+    const input = h('input', { type: 'file', accept, multiple, style: { display: 'none' } }) as HTMLInputElement;
     input.addEventListener('change', () => {
-      resolve(input.files?.[0] ?? null);
+      resolve(Array.from(input.files ?? []));
       input.remove();
     });
     input.addEventListener('cancel', () => {
-      resolve(null);
+      resolve([]);
       input.remove();
     });
     document.body.append(input);

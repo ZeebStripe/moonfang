@@ -5,6 +5,8 @@ import {
   aboutDialog,
   bakeDialog,
   exportDialog,
+  importLibraryAction,
+  importTextureSetAction,
   openDemo,
   openMeshDialog,
   openMeshFile,
@@ -160,7 +162,13 @@ export function mountProgress(app: App) {
 }
 
 export function mountDropZone(app: App, target: HTMLElement) {
-  const veil = h('div', { class: 'drop-veil' }, icon(ICONS.plus), h('div', {}, 'Drop a mesh (.glb .obj .fbx), project (.opp) or HDRI (.hdr)'));
+  const veil = h(
+    'div',
+    { class: 'drop-veil' },
+    icon(ICONS.plus),
+    h('div', {}, 'Drop a mesh (.glb .obj .fbx), project (.opp), HDRI (.hdr),'),
+    h('div', {}, 'texture-set images (one material) or a material library (.oplib)'),
+  );
   target.append(veil);
   let depth = 0;
   target.addEventListener('dragenter', (e) => {
@@ -178,11 +186,15 @@ export function mountDropZone(app: App, target: HTMLElement) {
   target.addEventListener('drop', async (e) => {
     depth = 0;
     veil.classList.remove('show');
-    const file = e.dataTransfer?.files?.[0];
+    const files = Array.from(e.dataTransfer?.files ?? []);
+    const file = files[0];
     if (!file) return;
     e.preventDefault();
     const ext = file.name.split('.').pop()!.toLowerCase();
-    if (ext === 'opp' || ext === 'zip') await openProjectFile(app, file);
+    const isImage = (f: File) => /\.(png|jpe?g|webp|avif)$/i.test(f.name);
+    if (files.every(isImage)) await importTextureSetAction(app, files);
+    else if (ext === 'oplib' || ext === 'json') await importLibraryAction(app, file);
+    else if (ext === 'opp' || ext === 'zip') await openProjectFile(app, file);
     else if (ext === 'hdr') {
       await app.viewport.loadHDR(file);
       app.toast(`Environment: ${file.name}`);

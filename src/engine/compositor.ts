@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { createRT, FullscreenPass, GLSL_NOISE, rawMaterial } from './gl';
+import { createRT, FullscreenPass, GLSL_MAPS, GLSL_NOISE, rawMaterial } from './gl';
+import { mapUniforms, setMapUniforms, type TextureStore } from './library';
 import { BLEND_MODES, GEN_TYPES, HEIGHT_BLENDS, type Layer } from './layers';
 import type { MeshMaps } from './meshMaps';
 
@@ -63,6 +64,7 @@ uniform int uBlend;
 uniform int uHeightBlend;  // 0 = add, 1 = normal
 ${GLSL_NOISE}
 ${GLSL_MASK}
+${GLSL_MAPS}
 
 vec3 blendColor(vec3 a, vec3 b, int mode) {
   if (mode == 1) return a * b;
@@ -83,15 +85,14 @@ void main() {
     vec4 l0 = texture(uL0, vUv), l1 = texture(uL1, vUv), l2 = texture(uL2, vUv);
     col = l0.rgb; colA = l0.a; r = l1.r; rA = l1.g; mt = l1.b; mtA = l1.a; h = l2.r; hA = l2.g;
   } else {
+    vec3 pos = texture(uMeshA, vUv).xyz * uExtentRatio;
+    col = uFillColor; r = uFillVals.x; mt = uFillVals.y; h = uFillVals.z;
+    if (anyMap()) sampleMaps(pos, normalize(texture(uMeshB, vUv).xyz * 2.0 - 1.0), col, r, mt, h);
     float n = 0.0;
-    if (uVariation.x > 0.0) {
-      vec3 pos = texture(uMeshA, vUv).xyz * uExtentRatio;
-      n = (fbm(pos * uVariation.y + uVariation.z) - 0.5) * uVariation.x;
-    }
-    col = clamp(uFillColor * (1.0 + n * 1.2), 0.0, 1.0);
-    r = clamp(uFillVals.x + n * 0.7, 0.0, 1.0);
-    mt = uFillVals.y;
-    h = clamp(uFillVals.z + n * 0.6, 0.0, 1.0);
+    if (uVariation.x > 0.0) n = (fbm(pos * uVariation.y + uVariation.z) - 0.5) * uVariation.x;
+    col = clamp(col * (1.0 + n * 1.2), 0.0, 1.0);
+    r = clamp(r + n * 0.7, 0.0, 1.0);
+    h = clamp(h + n * 0.6, 0.0, 1.0);
     colA = uFillEnable.x; rA = uFillEnable.y; mtA = uFillEnable.z; hA = uFillEnable.w;
   }
 
@@ -182,6 +183,7 @@ export class Compositor {
     uBlend: { value: 0 },
     uHeightBlend: { value: 0 },
     ...maskUniforms(),
+    ...mapUniforms(),
   });
   private maskPreviewMat = rawMaterial(MASK_PREVIEW_FRAG, maskUniforms());
   private finalMat = rawMaterial(FINAL_FRAG, {
@@ -213,7 +215,7 @@ export class Compositor {
     this.maskPreview = createRT(size, size, { linear: true });
   }
 
-  composite(layers: Layer[], maps: MeshMaps, settings: CompositeSettings) {
+  composite(layers: Layer[], maps: MeshMaps, settings: CompositeSettings, store: TextureStore) {
     const r = this.renderer;
     this.fs.render(r, this.defaultsMat, this.accA);
     let src = this.accA;
@@ -240,6 +242,7 @@ export class Compositor {
         const c = layer.channels;
         u.uFillEnable.value.set(+c.color, +c.roughness, +c.metallic, +c.height);
         u.uVariation.value.set(layer.variation, layer.variationScale, layer.seed);
+        setMapUniforms(u, layer.maps, layer.tiling, store, this.size);
       }
       this.setMaskUniforms(this.layerMat, layer, maps);
       this.fs.render(r, this.layerMat, dst);

@@ -1,7 +1,7 @@
 import type { App } from '../app';
 import { downloadBlob, EXPORT_PRESETS } from '../engine/exporter';
 import { loadDemoMesh, loadMeshFile, type DemoMeshId } from '../engine/meshLoader';
-import { checkbox, h, pickFile, selectField, slider } from './dom';
+import { checkbox, h, pickFile, pickFiles, selectField, slider } from './dom';
 import { ICONS } from './icons';
 
 export function errorMessage(e: unknown) {
@@ -241,4 +241,86 @@ export function displaySettings(app: App): HTMLElement {
       h('button', { class: 'btn', onclick: () => bakeDialog(app) }, 'Bake mesh maps…'),
     ),
   );
+}
+
+// ---------------------------------------------------------------------------------- user library
+
+const IMAGE_ACCEPT = '.png,.jpg,.jpeg,.webp,.avif';
+
+export async function importTextureSetAction(app: App, files?: File[]) {
+  files ??= await pickFiles(IMAGE_ACCEPT, true);
+  if (!files.length) return;
+  try {
+    await app.importTextureSet(files);
+  } catch (e) {
+    app.toast(`Could not import texture set: ${errorMessage(e)}`, 'error');
+  }
+}
+
+export async function importLibraryAction(app: App, file?: File | null) {
+  file ??= await pickFile('.oplib,.zip,.json');
+  if (!file) return;
+  try {
+    const r = await app.library.importFile(file.name, new Uint8Array(await file.arrayBuffer()));
+    app.toast(`Imported ${r.materials} material(s) and ${r.smart} smart material(s) from ${file.name}`);
+  } catch (e) {
+    app.toast(`Could not import library: ${errorMessage(e)}`, 'error');
+  }
+}
+
+export function exportLibraryAction(app: App) {
+  const lib = app.library;
+  if (!lib.materials.length && !lib.smart.length) return app.toast('Your library is empty — import or save a material first.', 'warn');
+  downloadBlob(lib.exportFile() as BlobPart, 'my_materials.oplib', 'application/zip');
+  app.toast(`Exported ${lib.materials.length} material(s) and ${lib.smart.length} smart material(s)`);
+}
+
+export function saveMaterialDialog(app: App) {
+  const l = app.selected;
+  if (!l || l.kind !== 'fill') return app.toast('Select a fill layer to save its material.', 'warn');
+  const input = h('input', { type: 'text', value: l.name.split(' · ').pop() }) as HTMLInputElement;
+  const go = h('button', { class: 'btn primary' }, 'Save');
+  const close = openModal('Save Material', h('div', { class: 'form' }, h('div', { class: 'field' }, h('label', {}, 'Name'), input)), [go]);
+  const save = () => {
+    app.saveFillAsMaterial(l.id, input.value.trim() || l.name);
+    close();
+  };
+  go.addEventListener('click', save);
+  input.addEventListener('keydown', (e) => e.key === 'Enter' && save());
+  input.focus();
+  input.select();
+}
+
+export function saveSmartMaterialDialog(app: App) {
+  const fills = app.layers.filter((l) => l.kind === 'fill');
+  if (!fills.length) return app.toast('Smart materials are made from fill layers. Add some fill layers first.', 'warn');
+  // Preselect the selected layer's smart-material group ("Name · Layer"), else every fill layer.
+  const sel = app.selected;
+  const group = sel && sel.name.includes(' · ') ? sel.name.split(' · ')[0] : null;
+  const picked = new Set(fills.filter((l) => !group || l.name.startsWith(`${group} · `)).map((l) => l.id));
+  const name = h('input', { type: 'text', value: group ? `${group} (custom)` : 'My Smart Material' }) as HTMLInputElement;
+  const list = h(
+    'div',
+    { class: 'layer-pick' },
+    ...[...fills].reverse().map((l) =>
+      checkbox(
+        `${l.name}${l.mask?.generator ? ` — ${l.mask.generator.type} mask` : ''}`,
+        picked.has(l.id),
+        (v) => (v ? picked.add(l.id) : picked.delete(l.id)),
+      ),
+    ),
+  );
+  const body = h(
+    'div',
+    { class: 'form' },
+    h('div', { class: 'field' }, h('label', {}, 'Name'), name),
+    h('div', { class: 'dim small' }, 'Fill layers (top first) with their settings and generator masks. Paint layers and hand-painted mask strokes are tied to this mesh’s UVs and are not included.'),
+    list,
+  );
+  const go = h('button', { class: 'btn primary' }, 'Save Smart Material');
+  const close = openModal('Save as Smart Material', body, [go]);
+  go.addEventListener('click', () => {
+    if (!picked.size) return app.toast('Pick at least one layer.', 'warn');
+    if (app.saveLayersAsSmartMaterial([...picked], name.value.trim() || 'My Smart Material')) close();
+  });
 }

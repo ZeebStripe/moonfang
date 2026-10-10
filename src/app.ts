@@ -20,7 +20,8 @@ import { Painter, type BrushSettings, type PaintPart, type Stamp } from './engin
 import { readProject, restoreLayers, saveProject } from './engine/project';
 import { Viewport } from './engine/viewport';
 import { loadMeshSource } from './engine/meshLoader';
-import { materialById, type MaterialPreset, type SmartMaterial } from './data/materials';
+import { MATERIALS, type MaterialPreset, type SmartLayerSpec, type SmartMaterial } from './data/materials';
+import { importTextureSet, Library, mapTextureIds, TextureStore } from './engine/library';
 
 export type Tool = 'paint' | 'erase';
 export type ChangeKind = 'layers' | 'selection' | 'brush' | 'mesh' | 'view' | 'history' | 'settings' | 'tool';
@@ -60,10 +61,16 @@ export class App {
     pressureOpacity: false,
     values: { color: [0.8, 0.8, 0.78], roughness: 0.45, metallic: 0, height: 0.5 },
     channels: { color: true, roughness: true, metallic: true, height: false },
+    maps: null,
+    tiling: 4,
     materialName: 'Custom',
     maskValue: 1,
   };
   progress: ProgressInfo = { active: false, label: '', value: 0 };
+  /** decoded images used by textured materials */
+  textures = new TextureStore();
+  /** the user's own materials and smart materials (IndexedDB) */
+  library = new Library(this.textures);
 
   private ready = false;
   private needsComposite = true;
@@ -78,6 +85,9 @@ export class App {
     this.maps = new MeshMaps(this.renderer, this.fs);
     this.compositor = new Compositor(this.renderer, this.fs);
     this.painter = new Painter(this.renderer, this.fs, this.copier);
+    this.painter.setContext(this.maps, this.textures);
+    this.textures.onLoad(() => this.invalidate());
+    void this.library.load();
     this.exporter = new Exporter(this.renderer, this.fs);
     this.compositor.resize(this.texSize);
     this.painter.setTextureSize(this.texSize);
@@ -127,7 +137,7 @@ export class App {
         this.needsComposite = true;
       }
       if (this.needsComposite) {
-        this.compositor.composite(this.layers, this.maps, this.composite);
+        this.compositor.composite(this.layers, this.maps, this.composite, this.textures);
         if (this.viewport.mode === 'mask') this.compositor.renderMaskPreview(this.selected, this.maps);
         this.needsComposite = false;
       }
@@ -257,15 +267,34 @@ export class App {
   addFillLayer(preset?: MaterialPreset) {
     const l = createFillLayer(preset ? preset.name : this.nextName('Fill'), preset?.values ?? DEFAULT_VALUES);
     if (preset?.variation) l.variation = preset.variation;
+    if (preset?.maps) {
+      l.maps = cloneMaps(preset.maps);
+      l.tiling = preset.tiling ?? 4;
+      l.channels.height = !!preset.maps.height || preset.values.height !== 0.5;
+    }
     this.insertAboveSelected(l);
+  }
+
+  /** Built-in presets followed by the user's library. */
+  get allMaterials(): MaterialPreset[] {
+    return [...MATERIALS, ...this.library.materials];
+  }
+
+  findMaterial(id: string | undefined): MaterialPreset | undefined {
+    return id ? this.allMaterials.find((m) => m.id === id) : undefined;
   }
 
   addSmartMaterial(sm: SmartMaterial) {
     const created: Layer[] = sm.layers.map((spec) => {
-      const preset = materialById(spec.material);
-      const values: MaterialValues = { ...preset.values, ...spec.values };
+      const preset = this.findMaterial(spec.material);
+      const values: MaterialValues = { ...DEFAULT_VALUES, ...preset?.values, ...spec.values };
       const l = createFillLayer(`${sm.name} · ${spec.name}`, values, spec.channels);
-      l.variation = spec.variation ?? preset.variation ?? 0;
+      l.variation = spec.variation ?? preset?.variation ?? 0;
+      const maps = spec.maps ?? preset?.maps;
+      if (maps) {
+        l.maps = cloneMaps(maps);
+        l.tiling = spec.tiling ?? preset?.tiling ?? 4;
+      }
       if (spec.variationScale) l.variationScale = spec.variationScale;
       if (spec.opacity !== undefined) l.opacity = spec.opacity;
       if (spec.blend) l.blend = spec.blend;
@@ -324,6 +353,7 @@ export class App {
         mask,
         values: { ...src.values, color: [...src.values.color] as [number, number, number] },
         channels: { ...src.channels },
+        maps: src.maps ? cloneMaps(src.maps) : null,
       };
     }
     r.setRenderTarget(null);
@@ -387,10 +417,97 @@ export class App {
   // ---------------------------------------------------------------- brush
   setBrushMaterial(p: MaterialPreset) {
     this.brush.values = { ...p.values, color: [...p.values.color] as [number, number, number] };
+    this.brush.maps = p.maps ? cloneMaps(p.maps) : null;
+    this.brush.tiling = p.tiling ?? 4;
     this.brush.materialName = p.name;
     this.brush.channels.color = this.brush.channels.roughness = this.brush.channels.metallic = true;
-    this.brush.channels.height = p.values.height !== 0.5;
+    this.brush.channels.height = !!p.maps?.height || p.values.height !== 0.5;
     this.emit('brush');
+  }
+
+  // ---------------------------------------------------------------- user library
+  /** Creates a material from loose PBR images and adds it to the library. */
+  async importTextureSet(files: File[]): Promise<MaterialPreset> {
+    const data = await Promise.all(files.map(async (f) => ({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) })));
+    const res = await importTextureSet(data);
+    await Promise.all(res.assets.map((a) => this.textures.add(a)));
+    this.library.addMaterial(res.material);
+    const m = res.material.maps!;
+    const used = (['color', 'roughness', 'metallic', 'height'] as const).filter((k) => m[k]);
+    this.toast(`Imported material "${res.material.name}" (${used.join(', ')})`);
+    for (const s of res.skipped) this.toast(`Skipped ${s}`, 'warn');
+    return res.material;
+  }
+
+  /** Stores a fill layer's material (values + maps) in the library. */
+  saveFillAsMaterial(id: number, name?: string) {
+    const l = this.layers.find((x) => x.id === id);
+    if (!l || l.kind !== 'fill') return;
+    const m: MaterialPreset = {
+      id: `user_${Date.now().toString(36)}`,
+      name: name || l.name,
+      category: 'Custom',
+      values: { ...l.values, color: [...l.values.color] as [number, number, number] },
+      variation: l.variation,
+      maps: l.maps ? cloneMaps(l.maps) : undefined,
+      tiling: l.tiling,
+      custom: true,
+    };
+    this.library.addMaterial(m);
+    this.toast(`Saved material "${m.name}" to your library`);
+  }
+
+  /**
+   * Turns fill layers (bottom→top, with their generator masks) into a reusable smart material.
+   * Paint layers and hand-painted mask pixels are UV-specific and therefore left out.
+   */
+  saveLayersAsSmartMaterial(ids: number[], name: string): number {
+    const chosen = this.layers.filter((l) => ids.includes(l.id));
+    const fills = chosen.filter((l): l is Extract<Layer, { kind: 'fill' }> => l.kind === 'fill');
+    if (!fills.length) {
+      this.toast('Smart materials are built from fill layers — none selected.', 'warn');
+      return 0;
+    }
+    const layers: SmartLayerSpec[] = fills.map((f) => {
+      // Layers added from a smart material are named "<Smart> · <Layer>"; keep only the layer part.
+      const dot = f.name.lastIndexOf(' · ');
+      return {
+        name: dot >= 0 ? f.name.slice(dot + 3) : f.name,
+        values: { ...f.values, color: [...f.values.color] as [number, number, number] },
+        channels: { ...f.channels },
+        maps: f.maps ? cloneMaps(f.maps) : undefined,
+        tiling: f.tiling,
+        variation: f.variation,
+        variationScale: f.variationScale,
+        opacity: f.opacity,
+        blend: f.blend,
+        heightBlend: f.heightBlend,
+        generator: f.mask?.enabled && f.mask.generator ? { ...f.mask.generator } : undefined,
+      };
+    });
+    const colors = fills
+      .map((f) => `rgb(${f.values.color.map((v) => Math.round(v * 255)).join(',')})`)
+      .reverse()
+      .slice(0, 3);
+    while (colors.length < 3) colors.push(colors[colors.length - 1]);
+    const sm: SmartMaterial = {
+      id: `user_sm_${Date.now().toString(36)}`,
+      name,
+      preview: `radial-gradient(circle at 35% 30%, ${colors[0]} 0 38%, ${colors[1]} 39% 62%, ${colors[2]} 63%)`,
+      layers,
+      custom: true,
+    };
+    this.library.addSmart(sm);
+    const skipped = chosen.length - fills.length;
+    this.toast(`Saved smart material "${name}" (${layers.length} layers${skipped ? `, ${skipped} paint layer(s) skipped` : ''})`);
+    return layers.length;
+  }
+
+  /** Texture ids referenced by the current layers and brush (embedded in project files). */
+  usedTextureIds(): string[] {
+    const ids = new Set<string>(mapTextureIds(this.brush.maps));
+    for (const l of this.layers) if (l.kind === 'fill') mapTextureIds(l.maps).forEach((i) => ids.add(i));
+    return [...ids];
   }
 
   // ---------------------------------------------------------------- painting
@@ -463,6 +580,9 @@ export class App {
       composite: this.composite,
       brush: this.brush,
       layers: this.layers,
+      textures: this.usedTextureIds()
+        .map((id) => this.textures.asset(id))
+        .filter((a): a is NonNullable<typeof a> => !!a),
     });
   }
 
@@ -480,7 +600,10 @@ export class App {
     this.texSize = p.json.texSize;
     this.bake = { ...DEFAULT_BAKE, ...p.json.bake };
     this.composite = { ...this.composite, ...p.json.composite };
-    this.brush = { ...this.brush, ...p.json.brush };
+    // Older projects predate textured materials; keep the fields defined.
+    const brush = { ...this.brush, ...p.json.brush };
+    this.brush = { ...brush, maps: brush.maps ?? null, tiling: brush.tiling ?? 4 };
+    await Promise.all(p.textures.map((t) => this.textures.add(t)));
     this.compositor.resize(this.texSize);
     this.painter.setTextureSize(this.texSize);
     await this.openMesh(mesh, false);
@@ -517,4 +640,8 @@ export class App {
     }
     return img;
   }
+}
+
+function cloneMaps<T extends object>(m: T): T {
+  return JSON.parse(JSON.stringify(m));
 }

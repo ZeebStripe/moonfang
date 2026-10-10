@@ -1,13 +1,27 @@
 import type { App } from '../app';
-import { BLEND_MODES, GEN_LABELS, GEN_TYPES, defaultGenerator, type ChannelKey, type Layer, type MaterialValues, type ChannelSet } from '../engine/layers';
-import { displaySettings } from './actions';
+import { BLEND_MODES, GEN_LABELS, GEN_TYPES, defaultGenerator, hasMaps, type ChannelKey, type Layer, type MaterialMaps, type MaterialValues, type ChannelSet } from '../engine/layers';
+import type { TextureStore } from '../engine/library';
+import { displaySettings, saveMaterialDialog } from './actions';
 import { checkbox, colorField, h, iconButton, section, selectField, slider } from './dom';
 import { ICONS } from './icons';
 
 const CHANNEL_LABELS: Record<ChannelKey, string> = { color: 'Base Color', roughness: 'Roughness', metallic: 'Metallic', height: 'Height' };
 
-/** Channel toggles + values (shared by the brush and fill layers). */
-function channelEditor(values: MaterialValues, channels: ChannelSet, onChange: () => void): HTMLElement {
+/** Channel toggles + values (shared by the brush and fill layers). Textured channels show their map instead. */
+function channelEditor(
+  values: MaterialValues,
+  channels: ChannelSet,
+  onChange: () => void,
+  maps?: MaterialMaps | null,
+  store?: TextureStore,
+): HTMLElement {
+  const texChip = (k: ChannelKey) => {
+    const id = maps?.[k];
+    if (!id) return null;
+    const name = store?.asset(id)?.name ?? 'texture';
+    const label = k === 'roughness' && maps?.gloss ? `${name} (gloss, inverted)` : name;
+    return h('div', { class: 'field' }, h('label', {}, CHANNEL_LABELS[k]), h('span', { class: 'tex-chip', title: label }, label));
+  };
   const rows: HTMLElement[] = [];
   const toggle = (k: ChannelKey) =>
     h('input', {
@@ -27,12 +41,14 @@ function channelEditor(values: MaterialValues, channels: ChannelSet, onChange: (
     row.set(k, r);
     rows.push(r);
   };
-  add('color', colorField('Base Color', values.color, (c) => ((values.color = c), onChange())));
-  add('roughness', slider('Roughness', { value: values.roughness, min: 0, max: 1, onInput: (v) => ((values.roughness = v), onChange()) }));
-  add('metallic', slider('Metallic', { value: values.metallic, min: 0, max: 1, onInput: (v) => ((values.metallic = v), onChange()) }));
+  add('color', colorField(maps?.color ? 'Tint' : 'Base Color', values.color, (c) => ((values.color = c), onChange())));
+  if (maps?.color) rows.push(h('div', { class: 'chan-row' }, h('span', { style: { width: '13px' } }), texChip('color')!));
+  add('roughness', texChip('roughness') ?? slider('Roughness', { value: values.roughness, min: 0, max: 1, onInput: (v) => ((values.roughness = v), onChange()) }));
+  add('metallic', texChip('metallic') ?? slider('Metallic', { value: values.metallic, min: 0, max: 1, onInput: (v) => ((values.metallic = v), onChange()) }));
   add(
     'height',
-    slider('Height', { value: values.height, min: 0, max: 1, onInput: (v) => ((values.height = v), onChange()), title: '0.5 = flat, above raises, below carves' }),
+    texChip('height') ??
+      slider('Height', { value: values.height, min: 0, max: 1, onInput: (v) => ((values.height = v), onChange()), title: '0.5 = flat, above raises, below carves' }),
   );
   return h('div', { class: 'channels' }, ...rows);
 }
@@ -75,7 +91,11 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
     return section(
       title,
       app.tool === 'paint'
-        ? [h('div', { class: 'brush-material' }, h('span', { class: 'dim' }, 'Material: '), b.materialName), channelEditor(b.values, b.channels, () => (b.materialName = 'Custom'))]
+        ? [
+            h('div', { class: 'brush-material' }, h('span', { class: 'dim' }, 'Material: '), b.materialName),
+            channelEditor(b.values, b.channels, () => (b.materialName = 'Custom'), b.maps, app.textures),
+            ...mapControls(b, () => undefined, () => ((b.maps = null), (b.materialName = 'Custom'), render())),
+          ]
         : h('div', { class: 'dim small' }, 'Erases the enabled channels of the paint layer.'),
       app.tool === 'erase' ? channelToggles(b.channels) : null,
       ...common,
@@ -97,13 +117,25 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
     if (l.kind === 'fill') {
       parts.push(
         h('div', { class: 'subhead' }, 'Fill material'),
-        channelEditor(l.values, l.channels, () => {
-          changed();
-          scheduleCommit();
-        }),
+        channelEditor(
+          l.values,
+          l.channels,
+          () => {
+            changed();
+            scheduleCommit();
+          },
+          l.maps,
+          app.textures,
+        ),
+        ...mapControls(l, changed, () => ((l.maps = null), app.layerChanged(true), render())),
         slider('Variation', { value: l.variation, min: 0, max: 1, onInput: (v) => ((l.variation = v), changed()), title: 'Procedural noise applied to color, roughness and height' }),
         slider('Variation scale', { value: l.variationScale, min: 0.5, max: 60, step: 0.5, onInput: (v) => ((l.variationScale = v), changed()) }),
-        h('button', { class: 'btn small', onclick: () => ((l.seed = Math.random() * 100), changed()) }, 'New random seed'),
+        h(
+          'div',
+          { class: 'row' },
+          h('button', { class: 'btn small', onclick: () => ((l.seed = Math.random() * 100), changed()) }, 'New random seed'),
+          h('button', { class: 'btn small', onclick: () => saveMaterialDialog(app), title: 'Add this fill material to your library' }, 'Save as material…'),
+        ),
       );
     } else {
       parts.push(
@@ -116,6 +148,22 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
       );
     }
     return section(`Layer · ${l.name}`, ...parts);
+  }
+
+  /** Tiling + remove button for textured materials. */
+  function mapControls(target: { maps: MaterialMaps | null; tiling: number }, changed: () => void, remove: () => void): HTMLElement[] {
+    if (!hasMaps(target.maps)) return [];
+    return [
+      slider('Tiling', {
+        value: target.tiling,
+        min: 0.25,
+        max: 40,
+        step: 0.25,
+        onInput: (v) => ((target.tiling = v), changed()),
+        title: 'How many times the texture repeats across the model (triplanar projection)',
+      }),
+      h('button', { class: 'btn small', onclick: remove }, 'Remove textures'),
+    ];
   }
 
   let commitTimer = 0;

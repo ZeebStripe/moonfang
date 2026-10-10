@@ -1,11 +1,16 @@
-import type { ChannelSet, GeneratorParams, BlendMode, HeightBlend, MaterialValues } from '../engine/layers';
+import type { ChannelSet, GeneratorParams, BlendMode, HeightBlend, MaterialMaps, MaterialValues } from '../engine/layers';
 
 export interface MaterialPreset {
   id: string;
   name: string;
-  category: 'Metal' | 'Paint' | 'Organic' | 'Synthetic' | 'Mineral' | 'Grime';
+  category: 'Metal' | 'Paint' | 'Organic' | 'Synthetic' | 'Mineral' | 'Grime' | 'Custom';
   values: MaterialValues;
   variation?: number;
+  /** optional texture maps (user materials) */
+  maps?: MaterialMaps;
+  tiling?: number;
+  /** user-created / imported (lives in the library, can be deleted) */
+  custom?: boolean;
 }
 
 const m = (
@@ -50,14 +55,16 @@ export const MATERIALS: MaterialPreset[] = [
   m('verdigris', 'Verdigris', 'Grime', [0.32, 0.62, 0.52], 0.78, 0, 0.53, 0.35),
 ];
 
-export const materialById = (id: string) => MATERIALS.find((x) => x.id === id)!;
 
 export interface SmartLayerSpec {
   name: string;
-  material: string;
+  /** preset id the layer starts from (optional when `values` is complete) */
+  material?: string;
   channels?: Partial<ChannelSet>;
   /** override values of the preset */
   values?: Partial<MaterialValues>;
+  maps?: MaterialMaps;
+  tiling?: number;
   variation?: number;
   variationScale?: number;
   opacity?: number;
@@ -72,6 +79,7 @@ export interface SmartMaterial {
   /** CSS background for the shelf tile */
   preview: string;
   layers: SmartLayerSpec[];
+  custom?: boolean;
 }
 
 export const SMART_MATERIALS: SmartMaterial[] = [

@@ -11,6 +11,7 @@ import {
   type PaintLayer,
 } from './layers';
 import type { MeshSource } from './meshLoader';
+import type { TextureAsset } from './library';
 import type { BakeSettings } from './meshMaps';
 import type { CompositeSettings } from './compositor';
 import type { BrushSettings } from './painter';
@@ -32,6 +33,7 @@ interface ProjectJson {
   composite: CompositeSettings;
   brush: BrushSettings;
   layers: SerializedLayer[];
+  textures?: { id: string; name: string; mime: string; path: string }[];
 }
 
 export interface ProjectState {
@@ -41,6 +43,8 @@ export interface ProjectState {
   composite: CompositeSettings;
   brush: BrushSettings;
   layers: Layer[];
+  /** images referenced by textured fill layers / the brush */
+  textures: TextureAsset[];
 }
 
 export function saveProject(renderer: THREE.WebGLRenderer, s: ProjectState): Uint8Array {
@@ -71,7 +75,12 @@ export function saveProject(renderer: THREE.WebGLRenderer, s: ProjectState): Uin
     files[path] = new Uint8Array(s.meshSource.bytes);
     mesh = { kind: 'file', name: s.meshSource.name, path };
   }
-  const json: ProjectJson = { format: FORMAT, version: VERSION, texSize: s.texSize, mesh, bake: s.bake, composite: s.composite, brush: s.brush, layers };
+  const textures = s.textures.map((t) => {
+    const path = `textures/${t.id}`;
+    files[path] = t.bytes;
+    return { id: t.id, name: t.name, mime: t.mime, path };
+  });
+  const json: ProjectJson = { format: FORMAT, version: VERSION, texSize: s.texSize, mesh, bake: s.bake, composite: s.composite, brush: s.brush, layers, textures };
   files['project.json'] = strToU8(JSON.stringify(json, null, 1));
   renderer.setRenderTarget(null);
   return zipSync(files, { level: 6 });
@@ -81,6 +90,7 @@ export interface LoadedProject {
   json: ProjectJson;
   meshSource: MeshSource;
   files: Record<string, Uint8Array>;
+  textures: TextureAsset[];
 }
 
 export function readProject(bytes: Uint8Array): LoadedProject {
@@ -96,7 +106,10 @@ export function readProject(bytes: Uint8Array): LoadedProject {
     if (!data) throw new Error('Mesh file missing from project.');
     meshSource = { kind: 'file', name: json.mesh.name, bytes: data.slice().buffer };
   }
-  return { json, meshSource, files };
+  const textures = (json.textures ?? [])
+    .filter((t) => files[t.path])
+    .map((t) => ({ id: t.id, name: t.name, mime: t.mime, bytes: files[t.path] }));
+  return { json, meshSource, files, textures };
 }
 
 /** Recreates GPU layers; must be called after the texture size is set. */
@@ -130,7 +143,7 @@ export function restoreLayers(renderer: THREE.WebGLRenderer, copier: Copier, p: 
       layers.push({ ...rest, mask, rt });
     } else {
       const { mask: _m, ...rest } = s;
-      layers.push({ ...rest, mask });
+      layers.push({ ...rest, maps: rest.maps ?? null, tiling: rest.tiling ?? 4, mask });
     }
   }
   renderer.setRenderTarget(null);

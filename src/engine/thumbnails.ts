@@ -1,11 +1,20 @@
 import * as THREE from 'three';
 import type { MaterialValues } from './layers';
 
+export interface ThumbnailInput {
+  values: MaterialValues;
+  /** optional decoded textures (sphere UVs are used, which is fine for a preview) */
+  color?: THREE.Texture | null;
+  roughness?: THREE.Texture | null;
+  metallic?: THREE.Texture | null;
+  tiling?: number;
+}
+
 /** Renders small material-ball previews with the main renderer and returns data URLs. */
 export function renderMaterialThumbnails(
   renderer: THREE.WebGLRenderer,
   environment: THREE.Texture | null,
-  materials: MaterialValues[],
+  materials: (MaterialValues | ThumbnailInput)[],
   size = 88,
 ): string[] {
   const rt = new THREE.WebGLRenderTarget(size, size, { type: THREE.FloatType, samples: 4 });
@@ -28,10 +37,28 @@ export function renderMaterialThumbnails(
   const img = ctx.createImageData(size, size);
   const urls: string[] = [];
   const prevClear = renderer.getClearAlpha();
-  for (const v of materials) {
+  const temp: THREE.Texture[] = [];
+  const view = (t: THREE.Texture | null | undefined, srgb: boolean, tiling: number) => {
+    if (!t) return null;
+    // Same image, but sampled the way MeshStandardMaterial expects (sRGB color map, tiled on the sphere).
+    const c = t.clone();
+    c.colorSpace = srgb ? THREE.SRGBColorSpace : THREE.NoColorSpace;
+    c.repeat.set(tiling * 0.5, tiling * 0.25);
+    c.needsUpdate = true;
+    temp.push(c);
+    return c;
+  };
+  for (const item of materials) {
+    const input: ThumbnailInput = 'values' in item ? item : { values: item };
+    const v = input.values;
+    const tiling = input.tiling ?? 4;
     mat.color.setRGB(v.color[0], v.color[1], v.color[2], THREE.SRGBColorSpace);
-    mat.roughness = v.roughness;
-    mat.metalness = v.metallic;
+    mat.roughness = input.roughness ? 1 : v.roughness;
+    mat.metalness = input.metallic ? 1 : v.metallic;
+    mat.map = view(input.color, true, tiling);
+    mat.roughnessMap = view(input.roughness, false, tiling);
+    mat.metalnessMap = view(input.metallic, false, tiling);
+    mat.needsUpdate = true;
     renderer.setRenderTarget(rt);
     renderer.setClearColor(0x000000, 0);
     renderer.clear();
@@ -55,6 +82,7 @@ export function renderMaterialThumbnails(
   renderer.setClearColor(0x000000, prevClear);
   renderer.setRenderTarget(null);
   rt.dispose();
+  temp.forEach((t) => t.dispose());
   ball.geometry.dispose();
   mat.dispose();
   return urls;

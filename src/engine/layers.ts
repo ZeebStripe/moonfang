@@ -14,6 +14,23 @@ export interface MaterialValues {
   height: number;
 }
 
+/** Texture-backed channels of a material (ids into the TextureStore), sampled triplanar in object space. */
+export interface MaterialMaps {
+  color?: string;
+  roughness?: string;
+  metallic?: string;
+  height?: string;
+  /** the roughness map is actually a gloss/smoothness map */
+  gloss?: boolean;
+  /** which component (0 = R … 3 = A) to read, for packed maps such as ARM/ORM */
+  channels?: { roughness?: number; metallic?: number; height?: number };
+}
+export const MAP_KEYS = ['color', 'roughness', 'metallic', 'height'] as const;
+
+export function hasMaps(m: MaterialMaps | null | undefined): m is MaterialMaps {
+  return !!m && MAP_KEYS.some((k) => !!m[k]);
+}
+
 export const BLEND_MODES = ['normal', 'multiply', 'screen', 'overlay', 'add', 'subtract'] as const;
 export type BlendMode = (typeof BLEND_MODES)[number];
 export const HEIGHT_BLENDS = ['add', 'normal'] as const;
@@ -76,6 +93,9 @@ export interface FillLayer extends LayerBase {
   variation: number;
   variationScale: number;
   seed: number;
+  maps: MaterialMaps | null;
+  /** triplanar repeats across the model's bounding box */
+  tiling: number;
 }
 
 export type Layer = PaintLayer | FillLayer;
@@ -137,6 +157,8 @@ export function createFillLayer(name: string, values: MaterialValues, channels?:
     variation: 0,
     variationScale: 6,
     seed: Math.random() * 100,
+    maps: null,
+    tiling: 4,
   };
 }
 

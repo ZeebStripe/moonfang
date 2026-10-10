@@ -21,6 +21,11 @@ It runs in the browser (WebGL2) and is built with TypeScript and three.js.
   - UV padding through a jump-flood dilation, so there are no seams at mip levels
 - **Materials**: 27 PBR presets, with rendered thumbnails, that you can use on the brush or add as fill layers.
 - **Smart materials**: Worn Painted Steel, Military Paint, Rusty Iron, Weathered Copper, Scuffed Plastic, Antique Gold and Dusty Concrete. Each is a stack of fill layers driven by generators.
+- **Your own materials**, via **Library ▾** in the shelf or drag & drop:
+  - Import **PBR texture sets** (for example from ambientCG or Poly Haven). Maps are detected from file names: `BaseColor/Albedo/Diffuse`, `Roughness` (or `Gloss`, which is inverted), `Metallic`, `Height/Displacement`, and packed `ARM/ORM`.
+  - Textured materials are projected **triplanar** in object space, so they are seamless across UV seams. You can paint with them or use them as fill layers, with adjustable tiling and a color tint.
+  - Save a fill layer as a material, or a set of fill layers (with their generator masks) as a **smart material**.
+  - Your library is stored in the browser (IndexedDB). Export or import it as `.oplib` (a zip with the images) or as plain `.json`. Projects embed the textures they use.
 - **Smart masks**: one-click generator presets.
 - **Viewport**:
   - PBR preview with image-based lighting (built-in studio or your own `.hdr`)
@@ -41,7 +46,20 @@ npm run dev
 ```
 
 Then open http://localhost:5178. A demo mesh loads automatically. To use your own mesh, use **File → Open Mesh**, or drag a
-`.glb`, `.gltf` (embedded), `.obj` or `.fbx` file onto the viewport. The mesh needs non-overlapping UVs in 0–1.
+file onto the viewport. The mesh needs non-overlapping UVs in 0–1.
+
+| Mesh format | Notes |
+| --- | --- |
+| `.glb` | Recommended. |
+| `.gltf` | Only with embedded buffers. A `.gltf` that uses a separate `.bin` file or external textures can't be opened yet; convert it to `.glb`. |
+| `.obj` | Mesh only. The `.mtl` file is ignored. |
+| `.fbx` | Binary or ASCII. Skinned meshes are painted in their bind pose. |
+
+On Windows PowerShell 5.1, chain commands with `;` rather than `&&`:
+
+```powershell
+cd "$env:USERPROFILE\OneDrive\Dokumente\open-painter"; npm run dev
+```
 
 To build a static site into `dist/`, which you can host anywhere:
 
@@ -98,6 +116,7 @@ All painting and compositing runs on the GPU in **texture space**.
 - One texture set per model. Multi-material models are merged into one UV space.
 - No baking from a high-poly mesh yet. Curvature and AO come from the low-poly mesh, so edges need actual bevels for edge wear.
 - Missing so far: symmetry painting, brush alphas/stencils, layer folders, an emissive/opacity channel, an anchor/filter system, and a 2D UV view.
+- Texture sets: normal maps are skipped, because layers carry height rather than normals; use the set's height map. `.sbsar` procedural material files can't be imported, since they need a proprietary engine.
 - PNG export is 8-bit, so there is no 16-bit height or EXR output yet.
 - WebGL2 with `EXT_color_buffer_float` is required. That covers any recent desktop browser.
 

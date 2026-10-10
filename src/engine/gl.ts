@@ -215,3 +215,35 @@ vec3 linearToSrgb(vec3 c) {
   return mix(c * 12.92, 1.055 * pow(c, vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c));
 }
 `;
+
+/**
+ * Triplanar material maps (object-space projection, so they are seamless across UV seams).
+ * Fill layers and the brush use this to sample user texture sets.
+ */
+export const GLSL_MAPS = /* glsl */ `
+uniform sampler2D uMapC;
+uniform sampler2D uMapR;
+uniform sampler2D uMapM;
+uniform sampler2D uMapH;
+uniform vec4 uMapOn;      // color, rough, metal, height
+uniform vec4 uMapLod;
+uniform ivec4 uMapChan;   // component index for -, rough, metal, height
+uniform vec2 uMapParams;  // tiling, gloss
+vec4 triSample(sampler2D t, vec3 p, vec3 w, float lod) {
+  return textureLod(t, p.zy, lod) * w.x + textureLod(t, p.xz, lod) * w.y + textureLod(t, p.xy, lod) * w.z;
+}
+float chanOf(vec4 v, int c) { return c == 0 ? v.r : (c == 1 ? v.g : (c == 2 ? v.b : v.a)); }
+bool anyMap() { return dot(uMapOn, vec4(1.0)) > 0.5; }
+void sampleMaps(vec3 pos, vec3 n, inout vec3 col, inout float r, inout float m, inout float h) {
+  vec3 w = pow(abs(n), vec3(4.0));
+  w /= max(w.x + w.y + w.z, 1e-5);
+  vec3 p = pos * uMapParams.x;
+  if (uMapOn.x > 0.5) col *= triSample(uMapC, p, w, uMapLod.x).rgb;
+  if (uMapOn.y > 0.5) {
+    r = chanOf(triSample(uMapR, p, w, uMapLod.y), uMapChan.y);
+    if (uMapParams.y > 0.5) r = 1.0 - r;
+  }
+  if (uMapOn.z > 0.5) m = chanOf(triSample(uMapM, p, w, uMapLod.z), uMapChan.z);
+  if (uMapOn.w > 0.5) h = chanOf(triSample(uMapH, p, w, uMapLod.w), uMapChan.w);
+}
+`;

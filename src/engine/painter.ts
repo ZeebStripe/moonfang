@@ -1,6 +1,8 @@
 import * as THREE from 'three';
-import { clearTarget, Copier, createRT, FullscreenPass, MeshPass, rawMaterial, UV_SPACE_VERT } from './gl';
-import { createMaskRT, createPaintRT, type ChannelSet, type Layer, type MaterialValues } from './layers';
+import { clearTarget, Copier, createRT, FullscreenPass, GLSL_MAPS, MeshPass, rawMaterial, UV_SPACE_VERT } from './gl';
+import { createMaskRT, createPaintRT, type ChannelSet, type Layer, type MaterialMaps, type MaterialValues } from './layers';
+import { mapUniforms, setMapUniforms, type TextureStore } from './library';
+import type { MeshMaps } from './meshMaps';
 
 export interface BrushSettings {
   /** radius in CSS pixels */
@@ -13,6 +15,9 @@ export interface BrushSettings {
   pressureOpacity: boolean;
   values: MaterialValues;
   channels: ChannelSet;
+  /** texture maps of the brush material (triplanar) */
+  maps: MaterialMaps | null;
+  tiling: number;
   materialName: string;
   /** grey value used when painting into a mask */
   maskValue: number;
@@ -88,6 +93,10 @@ uniform vec3 uColor;
 uniform vec3 uVals;
 uniform vec4 uEn;
 uniform int uErase;
+uniform sampler2D uMeshA;
+uniform sampler2D uMeshB;
+uniform vec3 uExtentRatio;
+${GLSL_MAPS}
 vec2 chan(float v, float a, float bv, float k) {
   if (uErase == 1) return vec2(v, a * (1.0 - k));
   float na = a + (1.0 - a) * k;
@@ -97,16 +106,22 @@ vec2 chan(float v, float a, float bv, float k) {
 void main() {
   float m = texture(uStroke, vUv).r * uOpacity;
   vec4 s0 = texture(uS0, vUv), s1 = texture(uS1, vUv), s2 = texture(uS2, vUv);
+  vec3 bc = uColor;
+  vec3 bv = uVals;
+  if (anyMap() && m > 0.0) {
+    vec4 ma = texture(uMeshA, vUv);
+    sampleMaps(ma.xyz * uExtentRatio, normalize(texture(uMeshB, vUv).xyz * 2.0 - 1.0), bc, bv.x, bv.y, bv.z);
+  }
   float k = m * uEn.x;
   if (uErase == 1) {
     o0 = vec4(s0.rgb, s0.a * (1.0 - k));
   } else {
     float na = s0.a + (1.0 - s0.a) * k;
-    vec3 c = na > 1e-4 ? (s0.rgb * s0.a * (1.0 - k) + uColor * k) / na : uColor;
+    vec3 c = na > 1e-4 ? (s0.rgb * s0.a * (1.0 - k) + bc * k) / na : bc;
     o0 = vec4(c, na);
   }
-  o1 = vec4(chan(s1.r, s1.g, uVals.x, m * uEn.y), chan(s1.b, s1.a, uVals.y, m * uEn.z));
-  o2 = vec4(chan(s2.r, s2.g, uVals.z, m * uEn.w), 0.0, 1.0);
+  o1 = vec4(chan(s1.r, s1.g, bv.x, m * uEn.y), chan(s1.b, s1.a, bv.y, m * uEn.z));
+  o2 = vec4(chan(s2.r, s2.g, bv.z, m * uEn.w), 0.0, 1.0);
 }
 `;
 
@@ -174,7 +189,20 @@ export class Painter {
     uVals: { value: new THREE.Vector3() },
     uEn: { value: new THREE.Vector4() },
     uErase: { value: 0 },
+    uMeshA: { value: null },
+    uMeshB: { value: null },
+    uExtentRatio: { value: new THREE.Vector3(1, 1, 1) },
+    ...mapUniforms(),
   });
+
+  private maps: MeshMaps | null = null;
+  private store: TextureStore | null = null;
+
+  /** Mesh maps + texture store used to sample textured brush materials. */
+  setContext(maps: MeshMaps, store: TextureStore) {
+    this.maps = maps;
+    this.store = store;
+  }
 
   private applyMaskMat = rawMaterial(APPLY_MASK_FRAG, {
     uS0: { value: null },
@@ -292,6 +320,12 @@ export class Painter {
       p.uVals.value.set(b.values.roughness, b.values.metallic, b.values.height);
       p.uEn.value.set(+b.channels.color, +b.channels.roughness, +b.channels.metallic, +b.channels.height);
       p.uErase.value = a.erase ? 1 : 0;
+      if (this.maps && this.store) {
+        p.uMeshA.value = this.maps.meshATex;
+        p.uMeshB.value = this.maps.meshBTex;
+        p.uExtentRatio.value.copy(this.maps.extentRatio);
+        setMapUniforms(p, a.erase ? null : b.maps, b.tiling, this.store, this.size);
+      }
       this.fs.render(r, this.applyPaintMat, layer.rt);
     } else {
       const p = this.applyMaskMat.uniforms;
