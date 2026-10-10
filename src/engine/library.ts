@@ -396,3 +396,6 @@ const idbPut = (k: string, v: unknown) => tx('readwrite', (s) => s.put(v, k));
 const idbDel = (k: string) => tx('readwrite', (s) => s.delete(k));
 const idbKeys = () => tx('readonly', (s) => s.getAllKeys()).then((ks) => ks.map(String));
 const idbHas = (k: string) => tx('readonly', (s) => s.count(k)).then((n) => n > 0);
+
+/** Small key/value access to the app's IndexedDB store (used by autosave). */
+export const kv = { get: idbGet, put: idbPut, del: idbDel };

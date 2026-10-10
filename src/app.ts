@@ -17,14 +17,15 @@ import {
 import type { PaintMesh } from './engine/meshLoader';
 import { DEFAULT_BAKE, MeshMaps, type BakeSettings } from './engine/meshMaps';
 import { Painter, type BrushSettings, type PaintPart, type Stamp } from './engine/painter';
-import { readProject, restoreLayers, saveProject } from './engine/project';
+import { collectProjectFiles, readProject, restoreLayers } from './engine/project';
+import { zipSync } from 'fflate';
 import { Viewport } from './engine/viewport';
 import { loadMeshSource } from './engine/meshLoader';
 import { MATERIALS, type MaterialPreset, type SmartLayerSpec, type SmartMaterial } from './data/materials';
 import { importTextureSet, Library, mapTextureIds, TextureStore } from './engine/library';
 
 export type Tool = 'paint' | 'erase';
-export type ChangeKind = 'layers' | 'selection' | 'brush' | 'mesh' | 'view' | 'history' | 'settings' | 'tool';
+export type ChangeKind = 'layers' | 'selection' | 'brush' | 'mesh' | 'view' | 'history' | 'settings' | 'tool' | 'autosave';
 
 export interface ProgressInfo {
   active: boolean;
@@ -122,7 +123,12 @@ export class App {
   /** Request a recomposite of the layer stack on the next frame. */
   invalidate() {
     this.needsComposite = true;
+    this.revision++;
   }
+
+  /** Bumped on every change to the document; autosave compares against it. */
+  revision = 0;
+  lastAutosave = 0;
 
   get busy() {
     return this.progress.active;
@@ -572,8 +578,13 @@ export class App {
 
   // ---------------------------------------------------------------- project IO
   saveProject(): Uint8Array {
+    return zipSync(this.projectFiles(), { level: 6 });
+  }
+
+  /** Project contents before zipping (GPU readback happens here; zip can then run in a worker). */
+  projectFiles(): Record<string, Uint8Array> {
     if (!this.mesh) throw new Error('Nothing to save.');
-    return saveProject(this.renderer, {
+    return collectProjectFiles(this.renderer, {
       texSize: this.texSize,
       meshSource: this.mesh.source,
       bake: this.bake,

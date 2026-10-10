@@ -48,6 +48,11 @@ export interface ProjectState {
 }
 
 export function saveProject(renderer: THREE.WebGLRenderer, s: ProjectState): Uint8Array {
+  return zipSync(collectProjectFiles(renderer, s), { level: 6 });
+}
+
+/** Reads every layer back from the GPU and returns the project's files (zip them to get an .opp). */
+export function collectProjectFiles(renderer: THREE.WebGLRenderer, s: ProjectState): Record<string, Uint8Array> {
   const files: Record<string, Uint8Array> = {};
   const layers: SerializedLayer[] = s.layers.map((l) => {
     let mask: SerializedMask | null = null;
@@ -83,7 +88,7 @@ export function saveProject(renderer: THREE.WebGLRenderer, s: ProjectState): Uin
   const json: ProjectJson = { format: FORMAT, version: VERSION, texSize: s.texSize, mesh, bake: s.bake, composite: s.composite, brush: s.brush, layers, textures };
   files['project.json'] = strToU8(JSON.stringify(json, null, 1));
   renderer.setRenderTarget(null);
-  return zipSync(files, { level: 6 });
+  return files;
 }
 
 export interface LoadedProject {

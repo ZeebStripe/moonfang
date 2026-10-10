@@ -62,10 +62,14 @@ export function safeName(s: string) {
 
 // ---------------------------------------------------------------------------------- dialogs
 
-export function openModal(title: string, body: HTMLElement, footer: HTMLElement[] = []): () => void {
+export function openModal(title: string, body: HTMLElement, footer: HTMLElement[] = [], onClose?: () => void): () => void {
+  let closed = false;
   const close = () => {
+    if (closed) return;
+    closed = true;
     backdrop.remove();
     window.removeEventListener('keydown', onKey, true);
+    onClose?.();
   };
   const onKey = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {

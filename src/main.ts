@@ -2,6 +2,7 @@ import './style.css';
 import { App } from './app';
 import { loadDemoMesh } from './engine/meshLoader';
 import { mountDropZone, mountProgress, mountStatusbar, mountToasts, mountToolbar, mountTopbar } from './ui/chrome';
+import { setupAutosave } from './ui/autosave';
 import { bindViewportInput } from './ui/input';
 import { mountLayersPanel } from './ui/layersPanel';
 import { mountPropsPanel } from './ui/propsPanel';
@@ -35,7 +36,8 @@ async function boot() {
   mountDropZone(app, wrap);
   bindViewportInput(app, wrap, $('brush-cursor'));
 
-  await app.openMesh(loadDemoMesh('roundedCube'));
+  // Offer to restore the last autosave first; otherwise start with the demo mesh.
+  if (!(await setupAutosave(app))) await app.openMesh(loadDemoMesh('roundedCube'));
   // Exposed for debugging from the devtools console.
   (window as unknown as { app: App }).app = app;
 }
