@@ -66,6 +66,7 @@ export class App {
     tiling: 4,
     materialName: 'Custom',
     maskValue: 1,
+    symmetry: 'off',
   };
   progress: ProgressInfo = { active: false, label: '', value: 0 };
   /** decoded images used by textured materials */
@@ -613,7 +614,7 @@ export class App {
     this.composite = { ...this.composite, ...p.json.composite };
     // Older projects predate textured materials; keep the fields defined.
     const brush = { ...this.brush, ...p.json.brush };
-    this.brush = { ...brush, maps: brush.maps ?? null, tiling: brush.tiling ?? 4 };
+    this.brush = { ...brush, maps: brush.maps ?? null, tiling: brush.tiling ?? 4, symmetry: brush.symmetry ?? 'off' };
     await Promise.all(p.textures.map((t) => this.textures.add(t)));
     this.compositor.resize(this.texSize);
     this.painter.setTextureSize(this.texSize);

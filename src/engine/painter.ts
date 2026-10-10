@@ -21,6 +21,8 @@ export interface BrushSettings {
   materialName: string;
   /** grey value used when painting into a mask */
   maskValue: number;
+  /** mirror strokes across the model's center plane on this axis */
+  symmetry: 'off' | 'x' | 'y' | 'z';
 }
 
 export interface Stamp {
@@ -55,17 +57,22 @@ uniform vec4 uStamps[${MAX_STAMPS}];
 uniform int uCount;
 uniform float uHardness;
 uniform float uOrtho;
+uniform vec3 uMirror;       // per-axis scale: (1,1,1) = no mirror, (-1,1,1) = mirror X
+uniform vec3 uMirrorCenter;
 void main() {
-  vec4 clip = uViewProj * vec4(vPos, 1.0);
+  // For the symmetry pass, test the texel's mirror image against the brush instead of the texel itself.
+  vec3 pos = uMirrorCenter + (vPos - uMirrorCenter) * uMirror;
+  vec3 nrm = vNormal * uMirror;
+  vec4 clip = uViewProj * vec4(pos, 1.0);
   if (clip.w <= 0.0) discard;
   vec2 ndc = clip.xy / clip.w;
   vec2 suv = ndc * 0.5 + 0.5;
   if (suv.x < 0.0 || suv.y < 0.0 || suv.x > 1.0 || suv.y > 1.0) discard;
-  float d = -(uView * vec4(vPos, 1.0)).z;
+  float d = -(uView * vec4(pos, 1.0)).z;
   float sceneD = texture(uDepth, suv).r;
   if (d > sceneD + 0.006 + d * 0.003) discard;
-  vec3 V = uOrtho > 0.5 ? normalize((inverse(uView) * vec4(0.0, 0.0, 1.0, 0.0)).xyz) : normalize(uCamPos - vPos);
-  float facing = smoothstep(0.0, 0.25, dot(normalize(vNormal), V));
+  vec3 V = uOrtho > 0.5 ? normalize((inverse(uView) * vec4(0.0, 0.0, 1.0, 0.0)).xyz) : normalize(uCamPos - pos);
+  float facing = smoothstep(0.0, 0.25, dot(normalize(nrm), V));
   vec2 sp = suv * uScreen;
   float a = 0.0;
   for (int i = 0; i < ${MAX_STAMPS}; i++) {
@@ -175,6 +182,8 @@ export class Painter {
       uCount: { value: 0 },
       uHardness: { value: 0.5 },
       uOrtho: { value: 0 },
+      uMirror: { value: new THREE.Vector3(1, 1, 1) },
+      uMirrorCenter: { value: new THREE.Vector3() },
     },
     { vertex: UV_SPACE_VERT, blending: 'max' },
   );
@@ -218,6 +227,8 @@ export class Painter {
   ) {}
 
   setMesh(geometry: THREE.BufferGeometry) {
+    geometry.computeBoundingBox();
+    geometry.boundingBox!.getCenter(this.stampMat.uniforms.uMirrorCenter.value);
     this.pass = new MeshPass(geometry);
   }
 
@@ -297,7 +308,13 @@ export class Painter {
       const chunk = stamps.slice(i, i + MAX_STAMPS);
       chunk.forEach((s, j) => this.stampScratch[j].set(s.x, s.y, Math.max(s.r, 0.5), s.a));
       u.uCount.value = chunk.length;
+      u.uMirror.value.set(1, 1, 1);
       this.pass.render(r, this.stampMat, this.strokeRT);
+      const sym = this.active?.brush.symmetry;
+      if (sym && sym !== 'off') {
+        u.uMirror.value.set(sym === 'x' ? -1 : 1, sym === 'y' ? -1 : 1, sym === 'z' ? -1 : 1);
+        this.pass.render(r, this.stampMat, this.strokeRT);
+      }
     }
     this.applyStroke();
   }

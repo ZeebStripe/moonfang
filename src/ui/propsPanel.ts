@@ -69,6 +69,12 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
       slider('Hardness', { value: b.hardness, min: 0, max: 1, onInput: (v) => (b.hardness = v) }),
       slider('Opacity', { value: b.opacity, min: 0, max: 1, onInput: (v) => (b.opacity = v) }),
       slider('Spacing', { value: b.spacing, min: 0.02, max: 1, onInput: (v) => (b.spacing = v), title: 'Distance between stamps relative to the brush radius' }),
+      selectField(
+        'Symmetry',
+        [['off', 'Off'], ['x', 'Mirror X'], ['y', 'Mirror Y'], ['z', 'Mirror Z']] as const,
+        b.symmetry,
+        (v) => ((b.symmetry = v), app.emit('tool')),
+      ),
       h(
         'div',
         { class: 'row' },
