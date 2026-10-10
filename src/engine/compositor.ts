@@ -113,6 +113,25 @@ ${GLSL_MASK}
 void main() { o0 = vec4(vec3(computeMask(vUv)), 1.0); }
 `;
 
+/** Folder: blends the folder's composited result over the stack below it through mask × opacity. */
+const GROUP_FRAG = /* glsl */ `
+in vec2 vUv;
+layout(location = 0) out vec4 o0;
+layout(location = 1) out vec4 o1;
+uniform sampler2D uBelow0;
+uniform sampler2D uBelow1;
+uniform sampler2D uGroup0;
+uniform sampler2D uGroup1;
+uniform float uOpacity;
+${GLSL_NOISE}
+${GLSL_MASK}
+void main() {
+  float m = computeMask(vUv) * uOpacity;
+  o0 = mix(texture(uBelow0, vUv), texture(uGroup0, vUv), m);
+  o1 = mix(texture(uBelow1, vUv), texture(uGroup1, vUv), m);
+}
+`;
+
 const DEFAULTS_FRAG = /* glsl */ `
 layout(location = 0) out vec4 o0;
 layout(location = 1) out vec4 o1;
@@ -161,13 +180,20 @@ export interface CompositeSettings {
 
 export class Compositor {
   size = 0;
-  private accA!: THREE.WebGLRenderTarget;
-  private accB!: THREE.WebGLRenderTarget;
+  private pool: THREE.WebGLRenderTarget[] = [];
   /** MRT x3: baseColor (linear), ORM+height, normal. Used directly by the viewport material and the exporter. */
   final!: THREE.WebGLRenderTarget;
   maskPreview!: THREE.WebGLRenderTarget;
 
   private defaultsMat = rawMaterial(DEFAULTS_FRAG, {});
+  private groupMat = rawMaterial(GROUP_FRAG, {
+    uBelow0: { value: null },
+    uBelow1: { value: null },
+    uGroup0: { value: null },
+    uGroup1: { value: null },
+    uOpacity: { value: 1 },
+    ...maskUniforms(),
+  });
   private layerMat = rawMaterial(LAYER_FRAG, {
     uAcc0: { value: null },
     uAcc1: { value: null },
@@ -209,48 +235,18 @@ export class Compositor {
     if (size === this.size) return;
     this.dispose();
     this.size = size;
-    this.accA = createRT(size, size, { type: THREE.HalfFloatType, count: 2 });
-    this.accB = createRT(size, size, { type: THREE.HalfFloatType, count: 2 });
     this.final = createRT(size, size, { type: THREE.HalfFloatType, count: 3, linear: true, mipmaps: true });
     this.maskPreview = createRT(size, size, { linear: true });
   }
 
   composite(layers: Layer[], maps: MeshMaps, settings: CompositeSettings, store: TextureStore) {
     const r = this.renderer;
-    this.fs.render(r, this.defaultsMat, this.accA);
-    let src = this.accA;
-    let dst = this.accB;
-    const u = this.layerMat.uniforms;
-    for (const layer of layers) {
-      if (!layer.visible || layer.opacity <= 0) continue;
-      u.uAcc0.value = src.textures[0];
-      u.uAcc1.value = src.textures[1];
-      u.uOpacity.value = layer.opacity;
-      u.uBlend.value = BLEND_MODES.indexOf(layer.blend);
-      u.uHeightBlend.value = HEIGHT_BLENDS.indexOf(layer.heightBlend);
-      if (layer.kind === 'paint') {
-        u.uKind.value = 0;
-        u.uL0.value = layer.rt.textures[0];
-        u.uL1.value = layer.rt.textures[1];
-        u.uL2.value = layer.rt.textures[2];
-      } else {
-        u.uKind.value = 1;
-        u.uL0.value = u.uL1.value = u.uL2.value = this.dummy;
-        const v = layer.values;
-        u.uFillColor.value.set(v.color[0], v.color[1], v.color[2]);
-        u.uFillVals.value.set(v.roughness, v.metallic, v.height);
-        const c = layer.channels;
-        u.uFillEnable.value.set(+c.color, +c.roughness, +c.metallic, +c.height);
-        u.uVariation.value.set(layer.variation, layer.variationScale, layer.seed);
-        setMapUniforms(u, layer.maps, layer.tiling, store, this.size);
-      }
-      this.setMaskUniforms(this.layerMat, layer, maps);
-      this.fs.render(r, this.layerMat, dst);
-      [src, dst] = [dst, src];
-    }
+    const start = this.acquire();
+    this.fs.render(r, this.defaultsMat, start);
+    const result = this.compositeList(layers, start, true, maps, store);
     const f = this.finalMat.uniforms;
-    f.uAcc0.value = src.textures[0];
-    f.uAcc1.value = src.textures[1];
+    f.uAcc0.value = result.textures[0];
+    f.uAcc1.value = result.textures[1];
     f.uMeshA.value = maps.meshATex;
     f.uCov.value = maps.coverage.texture;
     f.uSeeds.value = maps.seeds.texture;
@@ -258,7 +254,74 @@ export class Compositor {
     f.uNormalK.value = 0.02 * settings.normalStrength;
     f.uAoStrength.value = settings.aoStrength;
     this.fs.render(r, this.finalMat, this.final);
+    this.release(result);
     r.setRenderTarget(null);
+  }
+
+  /**
+   * Composites `layers` on top of `src` and returns the target holding the result.
+   * `owned` says whether this call may recycle `src` (a folder keeps the stack below it for its final mix).
+   */
+  private compositeList(layers: Layer[], src: THREE.WebGLRenderTarget, owned: boolean, maps: MeshMaps, store: TextureStore): THREE.WebGLRenderTarget {
+    let cur = src;
+    let curOwned = owned;
+    for (const layer of layers) {
+      if (!layer.visible || layer.opacity <= 0) continue;
+      const dst = this.acquire();
+      if (layer.kind === 'group') {
+        const inner = this.compositeList(layer.children, cur, false, maps, store);
+        const g = this.groupMat.uniforms;
+        g.uBelow0.value = cur.textures[0];
+        g.uBelow1.value = cur.textures[1];
+        g.uGroup0.value = inner.textures[0];
+        g.uGroup1.value = inner.textures[1];
+        g.uOpacity.value = layer.opacity;
+        this.setMaskUniforms(this.groupMat, layer, maps);
+        this.fs.render(this.renderer, this.groupMat, dst);
+        if (inner !== cur) this.release(inner);
+      } else {
+        this.renderLayer(layer, cur, dst, maps, store);
+      }
+      if (curOwned) this.release(cur);
+      cur = dst;
+      curOwned = true;
+    }
+    return cur;
+  }
+
+  private renderLayer(layer: Exclude<Layer, { kind: 'group' }>, src: THREE.WebGLRenderTarget, dst: THREE.WebGLRenderTarget, maps: MeshMaps, store: TextureStore) {
+    const u = this.layerMat.uniforms;
+    u.uAcc0.value = src.textures[0];
+    u.uAcc1.value = src.textures[1];
+    u.uOpacity.value = layer.opacity;
+    u.uBlend.value = BLEND_MODES.indexOf(layer.blend);
+    u.uHeightBlend.value = HEIGHT_BLENDS.indexOf(layer.heightBlend);
+    if (layer.kind === 'paint') {
+      u.uKind.value = 0;
+      u.uL0.value = layer.rt.textures[0];
+      u.uL1.value = layer.rt.textures[1];
+      u.uL2.value = layer.rt.textures[2];
+    } else {
+      u.uKind.value = 1;
+      u.uL0.value = u.uL1.value = u.uL2.value = this.dummy;
+      const v = layer.values;
+      u.uFillColor.value.set(v.color[0], v.color[1], v.color[2]);
+      u.uFillVals.value.set(v.roughness, v.metallic, v.height);
+      const c = layer.channels;
+      u.uFillEnable.value.set(+c.color, +c.roughness, +c.metallic, +c.height);
+      u.uVariation.value.set(layer.variation, layer.variationScale, layer.seed);
+      setMapUniforms(u, layer.maps, layer.tiling, store, this.size);
+    }
+    this.setMaskUniforms(this.layerMat, layer, maps);
+    this.fs.render(this.renderer, this.layerMat, dst);
+  }
+
+  /** Accumulation targets are pooled; nested folders need one extra live target per level. */
+  private acquire(): THREE.WebGLRenderTarget {
+    return this.pool.pop() ?? createRT(this.size, this.size, { type: THREE.HalfFloatType, count: 2 });
+  }
+  private release(rt: THREE.WebGLRenderTarget) {
+    if (!this.pool.includes(rt)) this.pool.push(rt);
   }
 
   renderMaskPreview(layer: Layer | null, maps: MeshMaps) {
@@ -293,8 +356,8 @@ export class Compositor {
 
   dispose() {
     if (!this.size) return;
-    this.accA.dispose();
-    this.accB.dispose();
+    this.pool.forEach((rt) => rt.dispose());
+    this.pool = [];
     this.final.dispose();
     this.maskPreview.dispose();
     this.size = 0;

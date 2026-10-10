@@ -130,6 +130,7 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
       else if (key === 's') saveProjectAction(app);
       else if (key === 'e') exportDialog(app);
       else if (key === 'o') void openMeshDialog(app);
+      else if (key === 'g') app.addGroup(true);
       else return;
       e.preventDefault();
       return;

@@ -17,6 +17,7 @@ export function mountLayersPanel(app: App, root: HTMLElement) {
       { class: 'panel-tools' },
       iconButton(ICONS.paintLayer, 'Add paint layer', () => app.addPaintLayer()),
       iconButton(ICONS.fillLayer, 'Add fill layer', () => app.addFillLayer()),
+      iconButton(ICONS.folder, 'New folder (Ctrl+G groups the selected layer)', () => app.addGroup()),
       maskMenuBtn,
       iconButton(ICONS.copy, 'Duplicate layer', () => app.selectedId && app.duplicateLayer(app.selectedId)),
       iconButton(ICONS.trash, 'Delete layer', () => app.selectedId && app.deleteLayer(app.selectedId)),
@@ -62,6 +63,11 @@ export function mountLayersPanel(app: App, root: HTMLElement) {
         app.select(l.id, part);
       },
     });
+    if (part === 'content' && l.kind === 'group') {
+      el.classList.add('folder');
+      el.append(icon(ICONS.folder, 'thumb-icon'));
+      return el;
+    }
     if (part === 'content' && l.kind === 'fill') {
       el.style.background = l.channels.color ? srgbToHex(l.values.color) : '#555';
       el.append(icon(ICONS.fillLayer, 'thumb-icon'));
@@ -80,7 +86,7 @@ export function mountLayersPanel(app: App, root: HTMLElement) {
     return el;
   }
 
-  function row(l: Layer, index: number): HTMLElement {
+  function row(l: Layer, depth: number): HTMLElement {
     const selected = app.selectedId === l.id;
     const name = h('span', { class: 'layer-name', title: 'Double-click to rename' }, l.name);
     name.addEventListener('dblclick', (e) => {
@@ -103,7 +109,8 @@ export function mountLayersPanel(app: App, root: HTMLElement) {
     const el = h(
       'div',
       {
-        class: `layer-row ${selected ? 'selected' : ''} ${l.visible ? '' : 'hidden-layer'}`,
+        class: `layer-row ${selected ? 'selected' : ''} ${l.visible ? '' : 'hidden-layer'} ${l.kind === 'group' ? 'group-row' : ''}`,
+        style: { paddingLeft: `${2 + depth * 16}px` },
         draggable: true,
         role: 'option',
         'aria-selected': selected ? 'true' : 'false',
@@ -114,9 +121,26 @@ export function mountLayersPanel(app: App, root: HTMLElement) {
         l.visible = !l.visible;
         app.layerChanged(true);
       }, 'eye'),
+      l.kind === 'group'
+        ? h(
+            'button',
+            {
+              class: `twisty ${l.collapsed ? '' : 'open'}`,
+              title: l.collapsed ? 'Expand folder' : 'Collapse folder',
+              onclick: (e: MouseEvent) => {
+                e.stopPropagation();
+                l.collapsed = !l.collapsed;
+                render();
+              },
+            },
+            '▸',
+          )
+        : null,
       thumb(l, 'content'),
       l.mask ? thumb(l, 'mask') : null,
-      h('div', { class: 'layer-meta' }, name, h('span', { class: 'layer-sub' }, `${l.kind === 'paint' ? 'Paint' : 'Fill'} · ${l.blend} · ${Math.round(l.opacity * 100)}%`)),
+      h('div', { class: 'layer-meta' }, name, h('span', { class: 'layer-sub' }, l.kind === 'group'
+            ? `Folder · ${l.children.length} layer${l.children.length === 1 ? '' : 's'} · ${Math.round(l.opacity * 100)}%`
+            : `${l.kind === 'paint' ? 'Paint' : 'Fill'} · ${l.blend} · ${Math.round(l.opacity * 100)}%`)),
       h(
         'div',
         { class: 'layer-order' },
@@ -133,32 +157,41 @@ export function mountLayersPanel(app: App, root: HTMLElement) {
       dragId = null;
       el.classList.remove('dragging');
     });
+    // Folders accept drops into their middle third; everything else is above/below.
+    const zone = (e: DragEvent): 'above' | 'below' | 'into' => {
+      const r = el.getBoundingClientRect();
+      const t = (e.clientY - r.top) / r.height;
+      if (l.kind === 'group' && t > 0.3 && t < 0.7) return 'into';
+      return t < 0.5 ? 'above' : 'below';
+    };
     el.addEventListener('dragover', (e) => {
       if (dragId === null) return;
       e.preventDefault();
-      const r = el.getBoundingClientRect();
-      const above = e.clientY < r.top + r.height / 2;
-      el.classList.toggle('drop-above', above);
-      el.classList.toggle('drop-below', !above);
+      const z = zone(e);
+      el.classList.toggle('drop-above', z === 'above');
+      el.classList.toggle('drop-below', z === 'below');
+      el.classList.toggle('drop-into', z === 'into');
     });
-    el.addEventListener('dragleave', () => el.classList.remove('drop-above', 'drop-below'));
+    el.addEventListener('dragleave', () => el.classList.remove('drop-above', 'drop-below', 'drop-into'));
     el.addEventListener('drop', (e) => {
       e.preventDefault();
-      el.classList.remove('drop-above', 'drop-below');
+      el.classList.remove('drop-above', 'drop-below', 'drop-into');
       if (dragId === null || dragId === l.id) return;
-      const r = el.getBoundingClientRect();
-      const above = e.clientY < r.top + r.height / 2;
-      const from = app.layers.findIndex((x) => x.id === dragId);
-      // The list is displayed top-down (highest index first). "Above" in the list = higher stack index.
-      let to = above ? index + 1 : index;
-      if (from < to) to--;
-      app.moveLayerTo(dragId, to);
+      app.moveLayerRelative(dragId, l.id, zone(e));
     });
     return el;
   }
 
   function render() {
-    const rows = app.layers.map((l, i) => row(l, i)).reverse();
+    // Displayed top-down; lists are stored bottom → top.
+    const rows: HTMLElement[] = [];
+    const add = (layers: Layer[], depth: number) => {
+      for (const l of [...layers].reverse()) {
+        rows.push(row(l, depth));
+        if (l.kind === 'group' && !l.collapsed) add(l.children, depth + 1);
+      }
+    };
+    add(app.layers, 0);
     list.replaceChildren(...rows);
     if (!rows.length) list.append(h('div', { class: 'empty' }, app.mesh ? 'No layers. Add a paint or fill layer.' : 'Load a mesh to start.'));
   }

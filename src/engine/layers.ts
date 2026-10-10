@@ -98,7 +98,47 @@ export interface FillLayer extends LayerBase {
   tiling: number;
 }
 
-export type Layer = PaintLayer | FillLayer;
+/** Folder: its children are composited onto the stack below, then blended in through the folder's mask × opacity. */
+export interface GroupLayer extends LayerBase {
+  kind: 'group';
+  /** bottom → top, like the root list */
+  children: Layer[];
+  collapsed: boolean;
+}
+
+export type Layer = PaintLayer | FillLayer | GroupLayer;
+
+/** Depth-first walk over a layer tree (parents before their children). */
+export function* walkLayers(list: Layer[]): Generator<Layer> {
+  for (const l of list) {
+    yield l;
+    if (l.kind === 'group') yield* walkLayers(l.children);
+  }
+}
+
+export interface LayerLocation {
+  layer: Layer;
+  /** the array that contains the layer (root list or a folder's children) */
+  list: Layer[];
+  index: number;
+  parent: GroupLayer | null;
+}
+
+export function locateLayer(list: Layer[], id: number, parent: GroupLayer | null = null): LayerLocation | null {
+  for (let i = 0; i < list.length; i++) {
+    const l = list[i];
+    if (l.id === id) return { layer: l, list, index: i, parent };
+    if (l.kind === 'group') {
+      const found = locateLayer(l.children, id, l);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+export function createGroup(name: string, children: Layer[] = []): GroupLayer {
+  return { kind: 'group', id: newLayerId(), name, visible: true, opacity: 1, blend: 'normal', heightBlend: 'add', mask: null, children, collapsed: false };
+}
 
 let nextId = 1;
 export function newLayerId() {
@@ -164,5 +204,6 @@ export function createFillLayer(name: string, values: MaterialValues, channels?:
 
 export function disposeLayer(l: Layer) {
   if (l.kind === 'paint') l.rt.dispose();
+  if (l.kind === 'group') l.children.forEach(disposeLayer);
   l.mask?.rt.dispose();
 }

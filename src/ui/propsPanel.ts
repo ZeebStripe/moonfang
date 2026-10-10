@@ -115,8 +115,16 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
   function layerSection(l: Layer): HTMLElement {
     const changed = () => app.layerChanged();
     const commit = () => app.layerChanged(true);
+    const opacity = slider('Opacity', { value: l.opacity, min: 0, max: 1, onInput: (v) => ((l.opacity = v), changed()), onCommit: commit });
+    if (l.kind === 'group') {
+      return section(
+        `Folder · ${l.name}`,
+        opacity,
+        h('div', { class: 'dim small' }, 'The folder’s layers are composited together, then blended over the layers below through the folder’s mask and opacity.'),
+      );
+    }
     const parts: (HTMLElement | null)[] = [
-      slider('Opacity', { value: l.opacity, min: 0, max: 1, onInput: (v) => ((l.opacity = v), changed()), onCommit: commit }),
+      opacity,
       selectField('Blend (color)', BLEND_MODES.map((m) => [m, m[0].toUpperCase() + m.slice(1)] as const), l.blend, (v) => ((l.blend = v), commit())),
       selectField('Blend (height)', [['add', 'Add (relative)'], ['normal', 'Replace']] as const, l.heightBlend, (v) => ((l.heightBlend = v), commit())),
     ];

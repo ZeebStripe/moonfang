@@ -1,5 +1,6 @@
 import type { App } from '../app';
 import { downloadBlob, EXPORT_PRESETS } from '../engine/exporter';
+import { walkLayers } from '../engine/layers';
 import { loadDemoMesh, loadMeshFile, type DemoMeshId } from '../engine/meshLoader';
 import { checkbox, h, pickFile, pickFiles, selectField, slider } from './dom';
 import { ICONS } from './icons';
@@ -17,7 +18,7 @@ export async function openMeshFile(app: App, file: File) {
   if (app.busy) return;
   try {
     const mesh = await loadMeshFile(file.name, await file.arrayBuffer());
-    const keep = app.mesh && app.layers.length > 2 && confirm('Keep the current layers on the new mesh? (Cancel starts a fresh layer stack)');
+    const keep = app.mesh && app.allLayers.length > 2 && confirm('Keep the current layers on the new mesh? (Cancel starts a fresh layer stack)');
     await app.openMesh(mesh, !keep);
     app.toast(`Loaded ${file.name}`);
   } catch (e) {
@@ -181,6 +182,7 @@ export function shortcutsDialog() {
     ['C', 'Cycle viewport channel'],
     ['F', 'Frame model'],
     ['Ctrl + Z / Ctrl + Shift + Z', 'Undo / Redo'],
+    ['Ctrl + G', 'Put the selected layer in a new folder'],
     ['Ctrl + O', 'Open mesh'],
     ['Ctrl + S', 'Save project'],
     ['Ctrl + E', 'Export'],
@@ -296,13 +298,14 @@ export function saveMaterialDialog(app: App) {
 }
 
 export function saveSmartMaterialDialog(app: App) {
-  const fills = app.layers.filter((l) => l.kind === 'fill');
+  const fills = app.allLayers.filter((l) => l.kind === 'fill');
   if (!fills.length) return app.toast('Smart materials are made from fill layers. Add some fill layers first.', 'warn');
-  // Preselect the selected layer's smart-material group ("Name · Layer"), else every fill layer.
+  // Preselect the fill layers of the selected folder (e.g. one added from a smart material), else all of them.
   const sel = app.selected;
-  const group = sel && sel.name.includes(' · ') ? sel.name.split(' · ')[0] : null;
-  const picked = new Set(fills.filter((l) => !group || l.name.startsWith(`${group} · `)).map((l) => l.id));
-  const name = h('input', { type: 'text', value: group ? `${group} (custom)` : 'My Smart Material' }) as HTMLInputElement;
+  const group = sel?.kind === 'group' ? sel : null;
+  const inGroup = new Set(group ? [...walkLayers(group.children)].map((l) => l.id) : []);
+  const picked = new Set(fills.filter((l) => !group || inGroup.has(l.id)).map((l) => l.id));
+  const name = h('input', { type: 'text', value: group ? `${group.name} (custom)` : 'My Smart Material' }) as HTMLInputElement;
   const list = h(
     'div',
     { class: 'layer-pick' },

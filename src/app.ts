@@ -6,10 +6,13 @@ import {
   createFillLayer,
   createMaskRT,
   createPaintLayer,
+  createGroup,
   createPaintRT,
   defaultGenerator,
   disposeLayer,
+  locateLayer,
   newLayerId,
+  walkLayers,
   type GeneratorParams,
   type Layer,
   type MaterialValues,
@@ -207,7 +210,7 @@ export class App {
   async setResolution(size: number) {
     if (size === this.texSize || !this.mesh) return;
     const r = this.renderer;
-    for (const l of this.layers) {
+    for (const l of walkLayers(this.layers)) {
       if (l.kind === 'paint') {
         const rt = createPaintRT(size);
         this.copier.copy(r, l.rt.textures, rt);
@@ -232,11 +235,20 @@ export class App {
 
   // ---------------------------------------------------------------- selection
   get selected(): Layer | null {
-    return this.layers.find((l) => l.id === this.selectedId) ?? null;
+    return this.selectedId === null ? null : (locateLayer(this.layers, this.selectedId)?.layer ?? null);
+  }
+
+  findLayer(id: number): Layer | null {
+    return locateLayer(this.layers, id)?.layer ?? null;
+  }
+
+  /** Every layer in the tree, folders included (depth-first). */
+  get allLayers(): Layer[] {
+    return [...walkLayers(this.layers)];
   }
 
   select(id: number, part: PaintPart = 'content') {
-    const l = this.layers.find((x) => x.id === id);
+    const l = this.findLayer(id);
     if (!l) return;
     this.selectedId = id;
     this.part = part === 'mask' && l.mask ? 'mask' : 'content';
@@ -250,9 +262,11 @@ export class App {
   }
 
   // ---------------------------------------------------------------- layer operations
+  /** Inserts above the selected layer, in the same folder as it. */
   private insertAboveSelected(...ls: Layer[]) {
-    const idx = this.layers.findIndex((l) => l.id === this.selectedId);
-    this.layers.splice(idx < 0 ? this.layers.length : idx + 1, 0, ...ls);
+    const loc = this.selectedId === null ? null : locateLayer(this.layers, this.selectedId);
+    if (loc) loc.list.splice(loc.index + 1, 0, ...ls);
+    else this.layers.push(...ls);
     this.selectedId = ls[ls.length - 1].id;
     this.part = 'content';
     this.invalidate();
@@ -262,13 +276,31 @@ export class App {
 
   private nextName(base: string) {
     let i = 1;
-    const names = new Set(this.layers.map((l) => l.name));
+    const names = new Set(this.allLayers.map((l) => l.name));
     while (names.has(`${base} ${i}`)) i++;
     return `${base} ${i}`;
   }
 
   addPaintLayer() {
     this.insertAboveSelected(createPaintLayer(this.renderer, this.texSize, this.nextName('Layer')));
+  }
+
+  /** New folder above the selection; with `wrapSelected` the selected layer is moved into it. */
+  addGroup(wrapSelected = false) {
+    const group = createGroup(this.nextName('Folder'));
+    const loc = this.selectedId === null ? null : locateLayer(this.layers, this.selectedId);
+    if (wrapSelected && loc) {
+      loc.list.splice(loc.index, 1, group);
+      group.children.push(loc.layer);
+      group.name = `${loc.layer.name} folder`;
+      this.selectedId = group.id;
+      this.part = 'content';
+      this.invalidate();
+      this.emit('layers');
+      this.emit('selection');
+      return;
+    }
+    this.insertAboveSelected(group);
   }
 
   addFillLayer(preset?: MaterialPreset) {
@@ -295,7 +327,7 @@ export class App {
     const created: Layer[] = sm.layers.map((spec) => {
       const preset = this.findMaterial(spec.material);
       const values: MaterialValues = { ...DEFAULT_VALUES, ...preset?.values, ...spec.values };
-      const l = createFillLayer(`${sm.name} · ${spec.name}`, values, spec.channels);
+      const l = createFillLayer(spec.name, values, spec.channels);
       l.variation = spec.variation ?? preset?.variation ?? 0;
       const maps = spec.maps ?? preset?.maps;
       if (maps) {
@@ -316,18 +348,19 @@ export class App {
       return l;
     });
     this.renderer.setRenderTarget(null);
-    this.insertAboveSelected(...created);
+    // A smart material arrives as a folder.
+    this.insertAboveSelected(createGroup(sm.name, created));
     this.toast(`Added smart material "${sm.name}" (${created.length} layers)`);
   }
 
   deleteLayer(id: number) {
-    const idx = this.layers.findIndex((l) => l.id === id);
-    if (idx < 0) return;
-    const [l] = this.layers.splice(idx, 1);
-    this.painter.forgetLayer(l);
-    disposeLayer(l);
-    if (this.selectedId === id) {
-      const next = this.layers[Math.min(idx, this.layers.length - 1)];
+    const loc = locateLayer(this.layers, id);
+    if (!loc) return;
+    loc.list.splice(loc.index, 1);
+    for (const l of walkLayers([loc.layer])) this.painter.forgetLayer(l);
+    disposeLayer(loc.layer);
+    if (this.selectedId !== null && !this.findLayer(this.selectedId)) {
+      const next = loc.list[Math.min(loc.index, loc.list.length - 1)] ?? loc.parent ?? this.layers[this.layers.length - 1];
       this.selectedId = next?.id ?? null;
       this.part = 'content';
     }
@@ -338,8 +371,16 @@ export class App {
   }
 
   duplicateLayer(id: number) {
-    const src = this.layers.find((l) => l.id === id);
+    const src = this.findLayer(id);
     if (!src) return;
+    const copy = this.cloneLayer(src);
+    copy.name = `${src.name} copy`;
+    this.renderer.setRenderTarget(null);
+    this.insertAboveSelected(copy);
+  }
+
+  /** Deep copy including GPU textures and folder contents. */
+  private cloneLayer(src: Layer): Layer {
     const r = this.renderer;
     let mask = null;
     if (src.mask) {
@@ -347,48 +388,60 @@ export class App {
       this.copier.copy(r, [src.mask.rt.texture], rt);
       mask = { ...src.mask, rt, generator: src.mask.generator ? { ...src.mask.generator } : null };
     }
-    let copy: Layer;
     if (src.kind === 'paint') {
       const rt = createPaintRT(this.texSize);
       this.copier.copy(r, src.rt.textures, rt);
-      copy = { ...src, id: newLayerId(), name: `${src.name} copy`, rt, mask };
-    } else {
-      copy = {
-        ...src,
-        id: newLayerId(),
-        name: `${src.name} copy`,
-        mask,
-        values: { ...src.values, color: [...src.values.color] as [number, number, number] },
-        channels: { ...src.channels },
-        maps: src.maps ? cloneMaps(src.maps) : null,
-      };
+      return { ...src, id: newLayerId(), rt, mask };
     }
-    r.setRenderTarget(null);
-    this.insertAboveSelected(copy);
+    if (src.kind === 'group') return { ...src, id: newLayerId(), mask, children: src.children.map((c) => this.cloneLayer(c)) };
+    return {
+      ...src,
+      id: newLayerId(),
+      mask,
+      values: { ...src.values, color: [...src.values.color] as [number, number, number] },
+      channels: { ...src.channels },
+      maps: src.maps ? cloneMaps(src.maps) : null,
+    };
   }
 
+  /** Moves a layer up (+1) or down (−1) within its folder. */
   moveLayer(id: number, delta: number) {
-    const idx = this.layers.findIndex((l) => l.id === id);
-    const to = idx + delta;
-    if (idx < 0 || to < 0 || to >= this.layers.length) return;
-    const [l] = this.layers.splice(idx, 1);
-    this.layers.splice(to, 0, l);
+    const loc = locateLayer(this.layers, id);
+    if (!loc) return;
+    const to = loc.index + delta;
+    if (to < 0 || to >= loc.list.length) return;
+    loc.list.splice(loc.index, 1);
+    loc.list.splice(to, 0, loc.layer);
     this.invalidate();
     this.emit('layers');
   }
 
-  /** Moves a layer to a stack index (bottom = 0). */
-  moveLayerTo(id: number, index: number) {
-    const idx = this.layers.findIndex((l) => l.id === id);
-    if (idx < 0) return;
-    const [l] = this.layers.splice(idx, 1);
-    this.layers.splice(Math.max(0, Math.min(index, this.layers.length)), 0, l);
+  /** Drag & drop: place `id` above / below `targetId`, or inside folder `targetId`. */
+  moveLayerRelative(id: number, targetId: number, where: 'above' | 'below' | 'into') {
+    if (id === targetId) return;
+    const loc = locateLayer(this.layers, id);
+    if (!loc) return;
+    // A folder cannot be moved into itself or its descendants.
+    if (loc.layer.kind === 'group' && [...walkLayers(loc.layer.children)].some((l) => l.id === targetId)) return;
+    loc.list.splice(loc.index, 1);
+    const target = locateLayer(this.layers, targetId);
+    if (!target) {
+      loc.list.splice(loc.index, 0, loc.layer);
+      return;
+    }
+    if (where === 'into' && target.layer.kind === 'group') {
+      target.layer.children.push(loc.layer);
+      target.layer.collapsed = false;
+    } else {
+      // Lists are stored bottom → top; "above" in the panel means a higher index.
+      target.list.splice(where === 'above' ? target.index + 1 : target.index, 0, loc.layer);
+    }
     this.invalidate();
     this.emit('layers');
   }
 
   addMask(id: number, fill: 'white' | 'black', generator?: Partial<GeneratorParams> & Pick<GeneratorParams, 'type'>) {
-    const l = this.layers.find((x) => x.id === id);
+    const l = this.findLayer(id);
     if (!l) return;
     if (!l.mask) {
       l.mask = { rt: createMaskRT(this.renderer, this.texSize, fill === 'white' ? 1 : 0), enabled: true, generator: null };
@@ -403,7 +456,7 @@ export class App {
   }
 
   removeMask(id: number) {
-    const l = this.layers.find((x) => x.id === id);
+    const l = this.findLayer(id);
     if (!l?.mask) return;
     this.painter.forgetLayer(l, 'mask');
     l.mask.rt.dispose();
@@ -448,7 +501,7 @@ export class App {
 
   /** Stores a fill layer's material (values + maps) in the library. */
   saveFillAsMaterial(id: number, name?: string) {
-    const l = this.layers.find((x) => x.id === id);
+    const l = this.findLayer(id);
     if (!l || l.kind !== 'fill') return;
     const m: MaterialPreset = {
       id: `user_${Date.now().toString(36)}`,
@@ -469,7 +522,7 @@ export class App {
    * Paint layers and hand-painted mask pixels are UV-specific and therefore left out.
    */
   saveLayersAsSmartMaterial(ids: number[], name: string): number {
-    const chosen = this.layers.filter((l) => ids.includes(l.id));
+    const chosen = this.allLayers.filter((l) => ids.includes(l.id) && l.kind !== 'group');
     const fills = chosen.filter((l): l is Extract<Layer, { kind: 'fill' }> => l.kind === 'fill');
     if (!fills.length) {
       this.toast('Smart materials are built from fill layers — none selected.', 'warn');
@@ -513,7 +566,7 @@ export class App {
   /** Texture ids referenced by the current layers and brush (embedded in project files). */
   usedTextureIds(): string[] {
     const ids = new Set<string>(mapTextureIds(this.brush.maps));
-    for (const l of this.layers) if (l.kind === 'fill') mapTextureIds(l.maps).forEach((i) => ids.add(i));
+    for (const l of walkLayers(this.layers)) if (l.kind === 'fill') mapTextureIds(l.maps).forEach((i) => ids.add(i));
     return [...ids];
   }
 
@@ -525,6 +578,7 @@ export class App {
     if (!l) return 'Select or add a layer to paint on.';
     if (!l.visible) return 'The selected layer is hidden.';
     if (this.part === 'content' && l.kind === 'fill') return 'Fill layers are procedural — add a mask to the layer and paint the mask, or add a paint layer.';
+    if (this.part === 'content' && l.kind === 'group') return 'Folders hold layers — select a layer inside it, or add a mask to the folder and paint that.';
     return null;
   }
 
@@ -538,7 +592,7 @@ export class App {
   fillSelected(erase = false) {
     const l = this.selected;
     if (!l || this.painter.isPainting) return;
-    if (this.part === 'content' && l.kind === 'fill') return;
+    if (this.part === 'content' && l.kind !== 'paint') return;
     if (this.painter.fill(l, this.part, this.brush, erase)) {
       this.invalidate();
       this.emit('history');

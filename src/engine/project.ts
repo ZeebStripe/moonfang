@@ -6,6 +6,7 @@ import {
   createMaskRT,
   createPaintRT,
   type FillLayer,
+  type GroupLayer,
   type Layer,
   type LayerMask,
   type PaintLayer,
@@ -22,7 +23,8 @@ const VERSION = 1;
 type SerializedMask = Omit<LayerMask, 'rt'> & { data: string };
 type SerializedLayer =
   | (Omit<PaintLayer, 'rt' | 'mask'> & { mask: SerializedMask | null; data: string[] })
-  | (Omit<FillLayer, 'mask'> & { mask: SerializedMask | null });
+  | (Omit<FillLayer, 'mask'> & { mask: SerializedMask | null })
+  | (Omit<GroupLayer, 'mask' | 'children'> & { mask: SerializedMask | null; children: SerializedLayer[] });
 
 interface ProjectJson {
   format: typeof FORMAT;
@@ -54,7 +56,7 @@ export function saveProject(renderer: THREE.WebGLRenderer, s: ProjectState): Uin
 /** Reads every layer back from the GPU and returns the project's files (zip them to get an .opp). */
 export function collectProjectFiles(renderer: THREE.WebGLRenderer, s: ProjectState): Record<string, Uint8Array> {
   const files: Record<string, Uint8Array> = {};
-  const layers: SerializedLayer[] = s.layers.map((l) => {
+  const serialize = (l: Layer): SerializedLayer => {
     let mask: SerializedMask | null = null;
     if (l.mask) {
       const path = `layers/${l.id}_mask.bin`;
@@ -70,9 +72,14 @@ export function collectProjectFiles(renderer: THREE.WebGLRenderer, s: ProjectSta
       });
       return { ...rest, mask, data };
     }
+    if (l.kind === 'group') {
+      const { mask: _m, children, ...rest } = l;
+      return { ...rest, mask, children: children.map(serialize) };
+    }
     const { mask: _m, ...rest } = l;
     return { ...rest, mask };
-  });
+  };
+  const layers = s.layers.map(serialize);
   let mesh: ProjectJson['mesh'];
   if (s.meshSource.kind === 'demo') mesh = { kind: 'demo', id: s.meshSource.id };
   else {
@@ -128,8 +135,7 @@ export function restoreLayers(renderer: THREE.WebGLRenderer, copier: Copier, p: 
     t.needsUpdate = true;
     return t;
   };
-  const layers: Layer[] = [];
-  for (const s of p.json.layers) {
+  const restore = (s: SerializedLayer): Layer => {
     let mask: LayerMask | null = null;
     if (s.mask) {
       const rt = createMaskRT(renderer, size, 1);
@@ -145,12 +151,16 @@ export function restoreLayers(renderer: THREE.WebGLRenderer, copier: Copier, p: 
       copier.copy(renderer, tex, rt);
       tex.forEach((t) => t.dispose());
       const { data: _d, mask: _m, ...rest } = s;
-      layers.push({ ...rest, mask, rt });
-    } else {
-      const { mask: _m, ...rest } = s;
-      layers.push({ ...rest, maps: rest.maps ?? null, tiling: rest.tiling ?? 4, mask });
+      return { ...rest, mask, rt };
     }
-  }
+    if (s.kind === 'group') {
+      const { mask: _m, children, ...rest } = s;
+      return { ...rest, mask, children: children.map(restore) };
+    }
+    const { mask: _m, ...rest } = s;
+    return { ...rest, maps: rest.maps ?? null, tiling: rest.tiling ?? 4, mask };
+  };
+  const layers = p.json.layers.map(restore);
   renderer.setRenderTarget(null);
   return layers;
 }

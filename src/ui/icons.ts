@@ -17,6 +17,7 @@ export const ICONS = {
   undo: svg('<path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>'),
   redo: svg('<path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/>'),
   frame: svg('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'),
+  folder: svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
   close: svg('<path d="M6 6l12 12M18 6L6 18"/>'),
   swap: svg('<path d="M7 4L3 8l4 4"/><path d="M3 8h13a5 5 0 0 1 5 5"/><path d="M17 20l4-4-4-4"/><path d="M21 16H8a5 5 0 0 1-5-5"/>'),
 } as const;
