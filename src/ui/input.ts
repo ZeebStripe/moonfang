@@ -20,13 +20,37 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
   };
   const pressureOf = (e: PointerEvent) => (e.pointerType === 'pen' ? Math.max(0.02, e.pressure) : 1);
 
-  function stampsTo(p: { x: number; y: number }, pressure: number): Stamp[] {
+  let smooth: { x: number; y: number } | null = null;
+  let lastDir = 0;
+
+  /** One stamp with the brush dynamics (size/angle/opacity jitter, scatter, follow-stroke rotation) applied. */
+  function stamp(x: number, y: number, radius: number, alpha: number, dir: number): Stamp {
     const b = app.brush;
+    const r = radius * (1 - b.sizeJitter * Math.random());
+    if (b.scatter > 0) {
+      const ang = Math.random() * Math.PI * 2;
+      const d = Math.sqrt(Math.random()) * b.scatter * radius;
+      x += Math.cos(ang) * d;
+      y += Math.sin(ang) * d;
+    }
+    const rot = (b.angle * Math.PI) / 180 + (b.followStroke ? dir : 0) + b.angleJitter * Math.PI * (Math.random() * 2 - 1);
+    return { x, y, r, a: alpha * (1 - b.opacityJitter * Math.random()), rot };
+  }
+
+  function stampsTo(raw: { x: number; y: number }, pressure: number): Stamp[] {
+    const b = app.brush;
+    // Lazy mouse: the brush trails the pointer.
+    let p = raw;
+    if (b.smoothing > 0 && smooth) {
+      const k = 1 - Math.min(b.smoothing, 0.95);
+      smooth = { x: smooth.x + (raw.x - smooth.x) * k, y: smooth.y + (raw.y - smooth.y) * k };
+      p = smooth;
+    } else smooth = raw;
     const radius = b.size * dpr() * (b.pressureSize ? 0.15 + 0.85 * pressure : 1);
     const a = b.pressureOpacity ? pressure : 1;
     const out: Stamp[] = [];
     if (!last) {
-      out.push({ x: p.x, y: p.y, r: radius, a });
+      out.push(stamp(p.x, p.y, radius, a, lastDir));
       last = p;
       carry = 0;
       return out;
@@ -35,16 +59,64 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
     const dx = p.x - last.x;
     const dy = p.y - last.y;
     const seg = Math.hypot(dx, dy);
+    if (seg > 0.5) lastDir = Math.atan2(dy, dx);
     let s = spacing - carry;
     while (s <= seg) {
       const t = s / seg;
-      out.push({ x: last.x + dx * t, y: last.y + dy * t, r: radius, a });
+      out.push(stamp(last.x + dx * t, last.y + dy * t, radius, a, lastDir));
       s += spacing;
     }
     carry = seg - (s - spacing);
     last = p;
     return out;
   }
+
+  // ------------------------------------------------------------------ stencil (hold S)
+  let stencilKey = false;
+  let stencilDrag: { x: number; y: number; sx: number; sy: number } | null = null;
+  const stencilReady = () => !!app.brush.stencil.imageId && app.brush.stencil.enabled;
+
+  wrap.addEventListener(
+    'pointerdown',
+    (e) => {
+      if (!stencilKey || !stencilReady() || e.button !== 0) return;
+      e.stopPropagation();
+      e.preventDefault();
+      const st = app.brush.stencil;
+      stencilDrag = { x: e.clientX, y: e.clientY, sx: st.x, sy: st.y };
+      canvas.setPointerCapture(e.pointerId);
+    },
+    true,
+  );
+  canvas.addEventListener('pointermove', (e) => {
+    if (!stencilDrag) return;
+    const st = app.brush.stencil;
+    st.x = stencilDrag.sx + e.clientX - stencilDrag.x;
+    st.y = stencilDrag.sy + e.clientY - stencilDrag.y;
+    app.emit('stencil');
+  });
+  canvas.addEventListener('pointerup', () => (stencilDrag = null));
+  wrap.addEventListener(
+    'wheel',
+    (e) => {
+      if (!stencilKey || !stencilReady()) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const st = app.brush.stencil;
+      if (e.shiftKey) st.rotation = ((st.rotation + Math.sign(e.deltaY || e.deltaX) * 5 + 540) % 360) - 180;
+      else st.width = Math.max(20, Math.min(8000, st.width * (e.deltaY > 0 ? 1 / 1.08 : 1.08)));
+      app.emit('stencil');
+    },
+    { capture: true, passive: false },
+  );
+  window.addEventListener('keyup', (e) => {
+    if (e.key.toLowerCase() === 's') {
+      stencilKey = false;
+      stencilDrag = null;
+      wrap.classList.remove('stencil-edit');
+      app.emit('brush');
+    }
+  });
 
   function updateCursor(e?: PointerEvent) {
     const show = hover && !altDown && !!app.mesh;
@@ -60,7 +132,7 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
   wrap.addEventListener(
     'pointerdown',
     (e) => {
-      if (e.button !== 0 || e.altKey || painting) return;
+      if (e.button !== 0 || e.altKey || painting || stencilKey) return;
       if (e.target !== canvas) return;
       e.stopPropagation();
       e.preventDefault();
@@ -75,6 +147,7 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
       pointerId = e.pointerId;
       canvas.setPointerCapture(e.pointerId);
       last = null;
+      smooth = null;
       app.queueStamps(stampsTo(toBuffer(e), pressureOf(e)));
     },
     true,
@@ -158,6 +231,12 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
             break;
           case 'e':
             app.setTool('erase');
+            break;
+          case 's':
+            if (!e.repeat && stencilReady()) {
+              stencilKey = true;
+              wrap.classList.add('stencil-edit');
+            }
             break;
           case 'x':
             b.maskValue = 1 - b.maskValue;

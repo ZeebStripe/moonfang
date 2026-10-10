@@ -250,6 +250,7 @@ interface LibraryJson {
   version: 1;
   materials: MaterialPreset[];
   smartMaterials: SmartMaterial[];
+  tips?: { id: string; name: string; assetId: string }[];
   textures?: { id: string; name: string; mime: string; path: string }[];
 }
 
@@ -257,6 +258,8 @@ interface LibraryJson {
 export class Library {
   materials: MaterialPreset[] = [];
   smart: SmartMaterial[] = [];
+  /** imported brush tips (normalised greyscale PNG assets) */
+  tips: { id: string; name: string; assetId: string }[] = [];
   private listeners = new Set<() => void>();
 
   constructor(private store: TextureStore) {}
@@ -271,10 +274,11 @@ export class Library {
 
   async load() {
     try {
-      const data = (await idbGet('library')) as Pick<LibraryJson, 'materials' | 'smartMaterials'> | undefined;
+      const data = (await idbGet('library')) as Pick<LibraryJson, 'materials' | 'smartMaterials' | 'tips'> | undefined;
       if (!data) return;
       this.materials = data.materials ?? [];
       this.smart = data.smartMaterials ?? [];
+      this.tips = data.tips ?? [];
       for (const id of this.textureIds()) {
         const a = (await idbGet(`tex:${id}`)) as TextureAsset | undefined;
         if (a) void this.store.add(a);
@@ -289,6 +293,7 @@ export class Library {
     const ids = new Set<string>();
     for (const m of this.materials) mapTextureIds(m.maps).forEach((id) => ids.add(id));
     for (const s of this.smart) for (const l of s.layers) mapTextureIds(l.maps).forEach((id) => ids.add(id));
+    for (const t of this.tips) ids.add(t.assetId);
     return ids;
   }
 
@@ -302,7 +307,7 @@ export class Library {
       for (const key of await idbKeys()) {
         if (key.startsWith('tex:') && !ids.has(key.slice(4))) await idbDel(key);
       }
-      await idbPut('library', { materials: this.materials, smartMaterials: this.smart });
+      await idbPut('library', { materials: this.materials, smartMaterials: this.smart, tips: this.tips });
     } catch (e) {
       console.warn('Could not save material library', e);
     }
@@ -318,9 +323,15 @@ export class Library {
     this.changed();
   }
 
+  addTip(tip: { id: string; name: string; assetId: string }) {
+    this.tips = [...this.tips.filter((t) => t.id !== tip.id), tip];
+    this.changed();
+  }
+
   remove(id: string) {
     this.materials = this.materials.filter((m) => m.id !== id);
     this.smart = this.smart.filter((s) => s.id !== id);
+    this.tips = this.tips.filter((t) => t.id !== id);
     this.changed();
   }
 

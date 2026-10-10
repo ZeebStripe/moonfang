@@ -4,6 +4,7 @@ import type { TextureStore } from '../engine/library';
 import { displaySettings, saveMaterialDialog } from './actions';
 import { checkbox, colorField, h, iconButton, section, selectField, slider } from './dom';
 import { ICONS } from './icons';
+import { brushTipControls, stencilControls } from './brushUI';
 
 const CHANNEL_LABELS: Record<ChannelKey, string> = { color: 'Base Color', roughness: 'Roughness', metallic: 'Metallic', height: 'Height' };
 
@@ -81,6 +82,8 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
         checkbox('Pressure → size', b.pressureSize, (v) => (b.pressureSize = v)),
         checkbox('Pressure → opacity', b.pressureOpacity, (v) => (b.pressureOpacity = v)),
       ),
+      ...brushTipControls(app, render),
+      ...stencilControls(app, render),
     ];
     if (maskMode) {
       return section(

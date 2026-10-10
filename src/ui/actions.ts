@@ -178,6 +178,7 @@ export function shortcutsDialog() {
     ['[ and ]', 'Brush size'],
     ['Shift + [ and ]', 'Brush hardness'],
     ['X', 'Swap mask paint value (black/white)'],
+    ['S (hold)', 'Stencil: drag to move, wheel to scale, Shift+wheel to rotate'],
     ['M', 'Toggle painting layer content / mask'],
     ['C', 'Cycle viewport channel'],
     ['F', 'Frame model'],

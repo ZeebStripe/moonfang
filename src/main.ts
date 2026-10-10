@@ -4,6 +4,7 @@ import { loadDemoMesh } from './engine/meshLoader';
 import { mountDropZone, mountProgress, mountStatusbar, mountToasts, mountToolbar, mountTopbar } from './ui/chrome';
 import { setupAutosave } from './ui/autosave';
 import { bindViewportInput } from './ui/input';
+import { mountStencilOverlay } from './ui/brushUI';
 import { mountLayersPanel } from './ui/layersPanel';
 import { mountPropsPanel } from './ui/propsPanel';
 import { mountShelf } from './ui/shelf';
@@ -35,6 +36,7 @@ async function boot() {
   mountStatusbar(app, $('statusbar'));
   mountDropZone(app, wrap);
   bindViewportInput(app, wrap, $('brush-cursor'));
+  mountStencilOverlay(app, wrap);
 
   // Offer to restore the last autosave first; otherwise start with the demo mesh.
   if (!(await setupAutosave(app))) await app.openMesh(loadDemoMesh('roundedCube'));

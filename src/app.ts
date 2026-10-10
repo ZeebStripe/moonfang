@@ -19,16 +19,29 @@ import {
 } from './engine/layers';
 import type { PaintMesh } from './engine/meshLoader';
 import { DEFAULT_BAKE, MeshMaps, type BakeSettings } from './engine/meshMaps';
-import { Painter, type BrushSettings, type PaintPart, type Stamp } from './engine/painter';
+import { DEFAULT_STENCIL, Painter, type BrushSettings, type PaintPart, type Stamp } from './engine/painter';
 import { collectProjectFiles, readProject, restoreLayers } from './engine/project';
 import { zipSync } from 'fflate';
 import { Viewport } from './engine/viewport';
 import { loadMeshSource } from './engine/meshLoader';
 import { MATERIALS, type MaterialPreset, type SmartLayerSpec, type SmartMaterial } from './data/materials';
-import { importTextureSet, Library, mapTextureIds, TextureStore } from './engine/library';
+import { importTextureSet, Library, makeAsset, mapTextureIds, TextureStore } from './engine/library';
+import { builtinTipTexture, importTipImage } from './engine/brushTips';
 
 export type Tool = 'paint' | 'erase';
-export type ChangeKind = 'layers' | 'selection' | 'brush' | 'mesh' | 'view' | 'history' | 'settings' | 'tool' | 'autosave';
+export type ChangeKind = 'layers' | 'selection' | 'brush' | 'mesh' | 'view' | 'history' | 'settings' | 'tool' | 'autosave' | 'stencil';
+
+const DEFAULT_BRUSH_EXTRAS = {
+  symmetry: 'off' as const,
+  tip: 'round',
+  angle: 0,
+  followStroke: false,
+  sizeJitter: 0,
+  angleJitter: 0,
+  scatter: 0,
+  opacityJitter: 0,
+  smoothing: 0,
+};
 
 export interface ProgressInfo {
   active: boolean;
@@ -70,6 +83,15 @@ export class App {
     materialName: 'Custom',
     maskValue: 1,
     symmetry: 'off',
+    tip: 'round',
+    angle: 0,
+    followStroke: false,
+    sizeJitter: 0,
+    angleJitter: 0,
+    scatter: 0,
+    opacityJitter: 0,
+    smoothing: 0,
+    stencil: { ...DEFAULT_STENCIL },
   };
   progress: ProgressInfo = { active: false, label: '', value: 0 };
   /** decoded images used by textured materials */
@@ -92,6 +114,8 @@ export class App {
     this.painter = new Painter(this.renderer, this.fs, this.copier);
     this.painter.setContext(this.maps, this.textures);
     this.textures.onLoad(() => this.invalidate());
+    // Library contents (e.g. imported brush tips) appear in the brush panel.
+    this.library.onChange(() => this.emit('brush'));
     void this.library.load();
     this.exporter = new Exporter(this.renderer, this.fs);
     this.compositor.resize(this.texSize);
@@ -563,9 +587,46 @@ export class App {
     return layers.length;
   }
 
+  /** Brush tip texture, or null for the procedural round tip (or a tip whose image is missing). */
+  tipTexture() {
+    const id = this.brush.tip;
+    const user = this.library.tips.find((t) => t.id === id);
+    return user ? this.textures.get(user.assetId) : builtinTipTexture(id);
+  }
+
+  async importBrushTip(file: File) {
+    const { asset } = await importTipImage(file.name, new Uint8Array(await file.arrayBuffer()));
+    await this.textures.add(asset);
+    const tip = { id: `tip_${asset.id}`, name: file.name.replace(/\.[^.]+$/, ''), assetId: asset.id };
+    this.library.addTip(tip);
+    this.brush.tip = tip.id;
+    this.emit('brush');
+    this.toast(`Brush tip "${tip.name}" imported`);
+  }
+
+  /** Loads an image as the stencil, centred in the viewport. */
+  async loadStencil(file: File) {
+    const asset = await makeAsset(file.name, new Uint8Array(await file.arrayBuffer()));
+    await this.textures.add(asset);
+    const canvas = this.viewport.canvas;
+    const st = this.brush.stencil;
+    st.imageId = asset.id;
+    st.enabled = true;
+    st.x = canvas.clientWidth / 2;
+    st.y = canvas.clientHeight / 2;
+    st.width = Math.min(canvas.clientWidth, canvas.clientHeight) * 0.7;
+    st.rotation = 0;
+    this.emit('brush');
+    this.emit('stencil');
+    this.toast('Stencil loaded — hold S and drag to move, wheel to scale, Shift+wheel to rotate');
+  }
+
   /** Texture ids referenced by the current layers and brush (embedded in project files). */
   usedTextureIds(): string[] {
     const ids = new Set<string>(mapTextureIds(this.brush.maps));
+    if (this.brush.stencil.imageId) ids.add(this.brush.stencil.imageId);
+    const tip = this.library.tips.find((t) => t.id === this.brush.tip);
+    if (tip) ids.add(tip.assetId);
     for (const l of walkLayers(this.layers)) if (l.kind === 'fill') mapTextureIds(l.maps).forEach((i) => ids.add(i));
     return [...ids];
   }
@@ -585,7 +646,11 @@ export class App {
   beginStroke(): boolean {
     const l = this.selected;
     if (!l || this.paintBlockedReason()) return false;
-    return this.painter.beginStroke(l, this.part, this.viewport.camera, this.brush, this.tool === 'erase');
+    return this.painter.beginStroke(l, this.part, this.viewport.camera, this.brush, this.tool === 'erase', {
+      tip: this.tipTexture(),
+      stencil: this.textures.get(this.brush.stencil.imageId ?? undefined),
+      dpr: this.renderer.getPixelRatio(),
+    });
   }
 
   /** Fill (or clear) the whole selected layer / mask with the brush settings; undoable. */
@@ -668,7 +733,8 @@ export class App {
     this.composite = { ...this.composite, ...p.json.composite };
     // Older projects predate textured materials; keep the fields defined.
     const brush = { ...this.brush, ...p.json.brush };
-    this.brush = { ...brush, maps: brush.maps ?? null, tiling: brush.tiling ?? 4, symmetry: brush.symmetry ?? 'off' };
+    // Projects from older versions lack newer brush fields; fill them from the defaults.
+    this.brush = { ...DEFAULT_BRUSH_EXTRAS, ...brush, maps: brush.maps ?? null, tiling: brush.tiling ?? 4, stencil: { ...DEFAULT_STENCIL, ...brush.stencil } };
     await Promise.all(p.textures.map((t) => this.textures.add(t)));
     this.compositor.resize(this.texSize);
     this.painter.setTextureSize(this.texSize);

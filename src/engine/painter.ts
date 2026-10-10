@@ -23,6 +23,43 @@ export interface BrushSettings {
   maskValue: number;
   /** mirror strokes across the model's center plane on this axis */
   symmetry: 'off' | 'x' | 'y' | 'z';
+  /** brush tip id ('round' = procedural, uses hardness) */
+  tip: string;
+  /** degrees */
+  angle: number;
+  followStroke: boolean;
+  sizeJitter: number;
+  angleJitter: number;
+  /** position jitter in brush radii */
+  scatter: number;
+  opacityJitter: number;
+  /** lazy-mouse smoothing 0..0.95 */
+  smoothing: number;
+  stencil: StencilSettings;
+}
+
+/** Screen-space image that masks (or colors) the brush. Coordinates are CSS pixels in the viewport. */
+export interface StencilSettings {
+  imageId: string | null;
+  enabled: boolean;
+  x: number;
+  y: number;
+  width: number;
+  /** degrees */
+  rotation: number;
+  tile: boolean;
+  /** paint the stencil's colors (decal) instead of the brush color; its alpha masks the brush */
+  useColor: boolean;
+}
+
+export const DEFAULT_STENCIL: StencilSettings = { imageId: null, enabled: false, x: 0, y: 0, width: 400, rotation: 0, tile: false, useColor: false };
+
+/** Textures the painter needs for the current brush (resolved by the app). */
+export interface BrushTextures {
+  tip: THREE.Texture | null;
+  stencil: THREE.Texture | null;
+  /** device pixel ratio of the viewport (stencil coordinates are CSS pixels) */
+  dpr: number;
 }
 
 export interface Stamp {
@@ -31,6 +68,8 @@ export interface Stamp {
   y: number;
   r: number;
   a: number;
+  /** tip rotation in radians */
+  rot?: number;
 }
 
 export type PaintPart = 'content' | 'mask';
@@ -42,6 +81,54 @@ interface UndoEntry {
 }
 
 const MAX_STAMPS = 64;
+
+/** Stencil lookup shared by the stamp pass (mask) and the apply pass (decal colors). */
+const GLSL_STENCIL = /* glsl */ `
+uniform int uStencilOn;
+uniform int uStencilColor;
+uniform int uStencilTile;
+uniform sampler2D uStencil;
+uniform vec4 uStencilXf;    // center x, center y, width, height (CSS px)
+uniform float uStencilRot;  // radians
+uniform vec2 uScreen;
+uniform float uDpr;
+vec2 cssFromBuffer(vec2 sp) { return vec2(sp.x, uScreen.y - sp.y) / uDpr; }
+vec4 stencilSample(vec2 css) {
+  vec2 d = css - uStencilXf.xy;
+  float c = cos(uStencilRot), s = sin(uStencilRot);
+  vec2 uv = vec2(c * d.x + s * d.y, -s * d.x + c * d.y) / uStencilXf.zw + 0.5;
+  if (uStencilTile == 1) uv = fract(uv);
+  else if (uv.x < 0.0 || uv.y < 0.0 || uv.x > 1.0 || uv.y > 1.0) return vec4(0.0);
+  return texture(uStencil, uv);
+}
+float stencilMask(vec4 t) { return uStencilColor == 1 ? t.a : dot(t.rgb, vec3(0.299, 0.587, 0.114)) * t.a; }
+`;
+
+function stencilUniforms(): Record<string, THREE.IUniform> {
+  return {
+    uStencilOn: { value: 0 },
+    uStencilColor: { value: 0 },
+    uStencilTile: { value: 0 },
+    uStencil: { value: null },
+    uStencilXf: { value: new THREE.Vector4(0, 0, 1, 1) },
+    uStencilRot: { value: 0 },
+    uScreen: { value: new THREE.Vector2(1, 1) },
+    uDpr: { value: 1 },
+  };
+}
+
+function setStencilUniforms(u: Record<string, THREE.IUniform>, st: StencilSettings, tex: BrushTextures, buf: THREE.Vector2) {
+  const img = tex.stencil?.image as { width: number; height: number } | undefined;
+  const on = st.enabled && !!tex.stencil && !!img;
+  u.uStencilOn.value = on ? 1 : 0;
+  u.uStencilColor.value = st.useColor ? 1 : 0;
+  u.uStencilTile.value = st.tile ? 1 : 0;
+  u.uStencil.value = tex.stencil;
+  u.uStencilXf.value.set(st.x, st.y, st.width, img ? (st.width * img.height) / img.width : st.width);
+  u.uStencilRot.value = THREE.MathUtils.degToRad(st.rotation);
+  u.uScreen.value.copy(buf);
+  u.uDpr.value = tex.dpr;
+}
 const UNDO_LIMIT = 24;
 
 const STAMP_FRAG = /* glsl */ `
@@ -52,8 +139,11 @@ uniform mat4 uViewProj;
 uniform mat4 uView;
 uniform vec3 uCamPos;
 uniform sampler2D uDepth;
-uniform vec2 uScreen;
 uniform vec4 uStamps[${MAX_STAMPS}];
+uniform float uStampRot[${MAX_STAMPS}];
+uniform int uTipMode;        // 0 = procedural round, 1 = tip texture
+uniform sampler2D uTip;
+${GLSL_STENCIL}
 uniform int uCount;
 uniform float uHardness;
 uniform float uOrtho;
@@ -78,9 +168,18 @@ void main() {
   for (int i = 0; i < ${MAX_STAMPS}; i++) {
     if (i >= uCount) break;
     vec4 s = uStamps[i];
-    float dist = length(sp - s.xy) / s.z;
-    if (dist < 1.0) a = max(a, (1.0 - smoothstep(uHardness, 1.0, dist)) * s.w);
+    vec2 d = (sp - s.xy) / s.z;
+    if (uTipMode == 0) {
+      float dist = length(d);
+      if (dist < 1.0) a = max(a, (1.0 - smoothstep(uHardness, 1.0, dist)) * s.w);
+    } else {
+      float c = cos(uStampRot[i]), sn = sin(uStampRot[i]);
+      vec2 q = vec2(c * d.x + sn * d.y, -sn * d.x + c * d.y);
+      // Tip images are stored top row first (v = 0 at the top); screen y points up.
+      if (abs(q.x) < 1.0 && abs(q.y) < 1.0) a = max(a, texture(uTip, vec2(q.x * 0.5 + 0.5, 0.5 - q.y * 0.5)).r * s.w);
+    }
   }
+  if (uStencilOn == 1) a *= stencilMask(stencilSample(cssFromBuffer(sp)));
   if (a <= 0.0) discard;
   o0 = vec4(a * facing);
 }
@@ -103,7 +202,11 @@ uniform int uErase;
 uniform sampler2D uMeshA;
 uniform sampler2D uMeshB;
 uniform vec3 uExtentRatio;
+uniform vec3 uBBoxMin;
+uniform vec3 uBBoxSize;
+uniform mat4 uViewProj;
 ${GLSL_MAPS}
+${GLSL_STENCIL}
 vec2 chan(float v, float a, float bv, float k) {
   if (uErase == 1) return vec2(v, a * (1.0 - k));
   float na = a + (1.0 - a) * k;
@@ -118,6 +221,13 @@ void main() {
   if (anyMap() && m > 0.0) {
     vec4 ma = texture(uMeshA, vUv);
     sampleMaps(ma.xyz * uExtentRatio, normalize(texture(uMeshB, vUv).xyz * 2.0 - 1.0), bc, bv.x, bv.y, bv.z);
+  }
+  if (uStencilOn == 1 && uStencilColor == 1 && m > 0.0) {
+    // Decal: look up the stencil color at the screen position this texel projects to.
+    vec3 world = uBBoxMin + texture(uMeshA, vUv).xyz * uBBoxSize;
+    vec4 clip = uViewProj * vec4(world, 1.0);
+    vec2 sp = (clip.xy / clip.w * 0.5 + 0.5) * uScreen;
+    bc = stencilSample(cssFromBuffer(sp)).rgb;
   }
   float k = m * uEn.x;
   if (uErase == 1) {
@@ -177,12 +287,15 @@ export class Painter {
       uView: { value: new THREE.Matrix4() },
       uCamPos: { value: new THREE.Vector3() },
       uDepth: { value: null },
-      uScreen: { value: new THREE.Vector2() },
       uStamps: { value: this.stampScratch },
       uCount: { value: 0 },
       uHardness: { value: 0.5 },
       uOrtho: { value: 0 },
       uMirror: { value: new THREE.Vector3(1, 1, 1) },
+      uStampRot: { value: new Array(MAX_STAMPS).fill(0) },
+      uTipMode: { value: 0 },
+      uTip: { value: null },
+      ...stencilUniforms(),
       uMirrorCenter: { value: new THREE.Vector3() },
     },
     { vertex: UV_SPACE_VERT, blending: 'max' },
@@ -201,10 +314,19 @@ export class Painter {
     uMeshA: { value: null },
     uMeshB: { value: null },
     uExtentRatio: { value: new THREE.Vector3(1, 1, 1) },
+    uBBoxMin: { value: new THREE.Vector3() },
+    uBBoxSize: { value: new THREE.Vector3(1, 1, 1) },
+    uViewProj: { value: new THREE.Matrix4() },
     ...mapUniforms(),
+    ...stencilUniforms(),
   });
 
   private maps: MeshMaps | null = null;
+  private blank = (() => {
+    const t = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+    t.needsUpdate = true;
+    return t;
+  })();
   private store: TextureStore | null = null;
 
   /** Mesh maps + texture store used to sample textured brush materials. */
@@ -251,7 +373,7 @@ export class Painter {
     return this.redoStack.length > 0;
   }
 
-  beginStroke(layer: Layer, part: PaintPart, camera: THREE.Camera, brush: BrushSettings, erase: boolean): boolean {
+  beginStroke(layer: Layer, part: PaintPart, camera: THREE.Camera, brush: BrushSettings, erase: boolean, tex: BrushTextures): boolean {
     if (!this.pass || !this.strokeRT) return false;
     if (part === 'content' && layer.kind !== 'paint') return false;
     if (part === 'mask' && !layer.mask) return false;
@@ -273,6 +395,11 @@ export class Painter {
     u.uDepth.value = this.depthRT.texture;
     u.uScreen.value.set(buf.x, buf.y);
     u.uHardness.value = Math.min(brush.hardness, 0.999);
+    u.uTipMode.value = tex.tip ? 1 : 0;
+    u.uTip.value = tex.tip ?? this.blank;
+    const p = this.applyPaintMat.uniforms;
+    p.uViewProj.value.copy(u.uViewProj.value);
+    for (const mat of [this.stampMat, this.applyPaintMat]) setStencilUniforms(mat.uniforms, brush.stencil, tex, buf);
 
     this.begin(layer, part, brush, erase, 0);
     return true;
@@ -284,6 +411,7 @@ export class Painter {
     if (part === 'content' && layer.kind !== 'paint') return false;
     if (part === 'mask' && !layer.mask) return false;
     this.begin(layer, part, brush, erase, 1);
+    this.applyPaintMat.uniforms.uStencilOn.value = 0;
     this.applyStroke();
     this.endStroke();
     return true;
@@ -306,7 +434,10 @@ export class Painter {
     const u = this.stampMat.uniforms;
     for (let i = 0; i < stamps.length; i += MAX_STAMPS) {
       const chunk = stamps.slice(i, i + MAX_STAMPS);
-      chunk.forEach((s, j) => this.stampScratch[j].set(s.x, s.y, Math.max(s.r, 0.5), s.a));
+      chunk.forEach((s, j) => {
+        this.stampScratch[j].set(s.x, s.y, Math.max(s.r, 0.5), s.a);
+        (u.uStampRot.value as number[])[j] = s.rot ?? 0;
+      });
       u.uCount.value = chunk.length;
       u.uMirror.value.set(1, 1, 1);
       this.pass.render(r, this.stampMat, this.strokeRT);
@@ -341,6 +472,8 @@ export class Painter {
         p.uMeshA.value = this.maps.meshATex;
         p.uMeshB.value = this.maps.meshBTex;
         p.uExtentRatio.value.copy(this.maps.extentRatio);
+        p.uBBoxMin.value.copy(this.maps.bboxMin);
+        p.uBBoxSize.value.copy(this.maps.bboxSize);
         setMapUniforms(p, a.erase ? null : b.maps, b.tiling, this.store, this.size);
       }
       this.fs.render(r, this.applyPaintMat, layer.rt);

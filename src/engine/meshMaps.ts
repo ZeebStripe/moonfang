@@ -25,6 +25,9 @@ export class MeshMaps {
   maps!: THREE.WebGLRenderTarget;
   /** bbox extent per axis divided by the largest extent (to rebuild isotropic positions from meshA). */
   extentRatio = new THREE.Vector3(1, 1, 1);
+  /** bbox used for meshA's normalised positions: world = bboxMin + meshA.xyz * bboxSize */
+  bboxMin = new THREE.Vector3();
+  bboxSize = new THREE.Vector3(1, 1, 1);
 
   private coverageMat = rawMaterial(`layout(location = 0) out vec4 o0; void main(){ o0 = vec4(1.0); }`, {}, { vertex: UV_SPACE_VERT });
 
@@ -168,6 +171,8 @@ export class MeshMaps {
     const ext = bb.getSize(new THREE.Vector3()).max(new THREE.Vector3(1e-4, 1e-4, 1e-4));
     const maxExt = Math.max(ext.x, ext.y, ext.z);
     this.extentRatio.set(ext.x / maxExt, ext.y / maxExt, ext.z / maxExt);
+    this.bboxMin.copy(bb.min);
+    this.bboxSize.copy(ext);
     const raw = createRT(size, size, { type: THREE.HalfFloatType, count: 2 });
     clearTarget(r, raw, 0.5, 0.5, 0.5, 1);
     this.rawMat.uniforms.uMin.value.copy(bb.min);

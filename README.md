@@ -7,10 +7,15 @@ It runs in the browser (WebGL2) and is built with TypeScript and three.js.
 
 - **Projection painting** onto the 3D model across every PBR channel at once: base color, roughness, metallic and height. It paints across UV seams and is occlusion-aware, so strokes never bleed onto hidden surfaces. It also fades out at grazing angles.
 - **Brush**: size, hardness, opacity, spacing, pen pressure (size and/or opacity), per-channel toggles and an eraser.
-- **Layer stack**: paint layers and procedural fill layers with:
+  - **Tips**: round, square, splatter, grunge, scratches, star and leaf, plus imported images (dark-on-light images are inverted automatically). Tips have an angle and can follow the stroke direction.
+  - **Dynamics**: size, angle and opacity jitter, scatter, and lazy-mouse smoothing.
+  - **Symmetry**: mirror strokes across the model's center on X, Y or Z.
+  - **Stencils**: an image fixed to the screen that masks the brush. Hold `S` and drag to move it, scroll to scale, or Shift+scroll to rotate. It can be tiled, and "Use colors" turns it into a **decal projector**.
+- **Layer stack**: paint layers, procedural fill layers and **folders**, with:
   - opacity
   - blend modes (normal, multiply, screen, overlay, add, subtract) plus separate height blending
   - visibility, drag-and-drop reordering and duplication
+  - folders that can be nested, collapsed, and given their own mask or opacity; drag layers into or out of them, and Ctrl+G wraps the selected layer in a new folder. Smart materials arrive as a folder.
 - **Masks**: painted masks (black/white/grey) that multiply with procedural **generators**:
   - Edge Wear, Dirt/Cavity, Top-Facing (dust), Position Gradient, Noise, Ambient Occlusion, Curvature
   - each generator has amount, contrast, noise breakup, scale, invert and seed controls
@@ -36,6 +41,7 @@ It runs in the browser (WebGL2) and is built with TypeScript and three.js.
   - a **textured GLB** with the material applied
 - **Projects**: save and load `.opp` files, which contain the mesh, layers, masks and settings, all lossless.
 - **Undo/redo** for strokes and fills, with 24 steps.
+- **Autosave**: every 30 seconds to browser storage, with a restore prompt the next time you start.
 - **Texture resolution**: 512–4096, and existing layers are resampled when you change it.
 
 ## Getting started
@@ -86,6 +92,8 @@ npm run build
 | `B` / `E` | Paint / Erase |
 | `[` `]` | Brush size (with Shift: hardness) |
 | `X` | Swap the mask paint value (black/white) |
+| `S` (hold) | Stencil: drag to move, scroll to scale, Shift+scroll to rotate |
+| Ctrl+G | Put the selected layer in a new folder |
 | `M` | Toggle painting the layer content / its mask |
 | `C` | Cycle the viewport channel |
 | `F` | Frame the model |
@@ -115,7 +123,7 @@ All painting and compositing runs on the GPU in **texture space**.
 
 - One texture set per model. Multi-material models are merged into one UV space.
 - No baking from a high-poly mesh yet. Curvature and AO come from the low-poly mesh, so edges need actual bevels for edge wear.
-- Missing so far: symmetry painting, brush alphas/stencils, layer folders, an emissive/opacity channel, an anchor/filter system, and a 2D UV view.
+- Missing so far: an emissive/opacity channel, an anchor/filter system, a 2D UV view, and undo for layer operations (undo only covers strokes and fills).
 - Texture sets: normal maps are skipped, because layers carry height rather than normals; use the set's height map. `.sbsar` procedural material files can't be imported, since they need a proprietary engine.
 - PNG export is 8-bit, so there is no 16-bit height or EXR output yet.
 - WebGL2 with `EXT_color_buffer_float` is required. That covers any recent desktop browser.
