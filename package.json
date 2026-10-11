@@ -64,10 +64,14 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": "always",
+      "createStartMenuShortcut": true,
+      "shortcutName": "Moonfang 3D",
+      "runAfterFinish": true,
       "artifactName": "Moonfang-3D-Setup-${version}.${ext}"
     },
     "portable": {
-      "artifactName": "Moonfang-3D-${version}-portable.${ext}"
+      "artifactName": "Moonfang-3D-Portable-${version}.${ext}"
     },
     "linux": {
       "target": [
@@ -75,7 +79,7 @@
       ],
       "icon": "icon.png",
       "category": "Graphics",
-      "artifactName": "Moonfang-3D-${version}-linux-${arch}.${ext}"
+      "artifactName": "Moonfang-3D-Linux-${version}-${arch}.${ext}"
     }
   }
 }

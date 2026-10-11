@@ -80,10 +80,13 @@ It runs as a desktop app or in the browser (WebGL2) and is built with TypeScript
 
 Download the latest build from the [Releases page](https://github.com/ZeebStripe/moonfang/releases):
 
-- **Windows**: `Moonfang-3D-Setup-<version>.exe` installs it with a Start menu entry. `Moonfang-3D-<version>-portable.exe`
-  runs without installing. The builds aren't code-signed yet, so Windows SmartScreen may warn the first time: choose
-  *More info → Run anyway*.
-- **Linux**: `Moonfang-3D-<version>-linux-x86_64.AppImage`. Make it executable (`chmod +x`) and run it.
+- **Windows**: download `Moonfang-3D-Setup-<version>.exe` and double-click it in your Downloads folder. The installer
+  starts Moonfang 3D when it finishes and adds Desktop and Start menu shortcuts. To skip installing, use
+  `Moonfang-3D-Portable-<version>.exe` instead: double-click it to run. The builds aren't code-signed yet, so Windows
+  SmartScreen may warn the first time: choose *More info → Run anyway*.
+- **Linux**: `Moonfang-3D-Linux-<version>-x86_64.AppImage`. Make it executable (`chmod +x`, or Properties → allow
+  running as a program) and double-click it.
+- You don't need the *Source code* downloads; they're for developers.
 
 The desktop app works fully offline. It bundles its own Chromium, so it doesn't depend on your browser.
 
