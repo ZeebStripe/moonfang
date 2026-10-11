@@ -11,6 +11,8 @@ export interface MaterialPreset {
   tiling?: number;
   /** user-created / imported (lives in the library, can be deleted) */
   custom?: boolean;
+  /** the user's own category in their library (free text) */
+  group?: string;
 }
 
 const m = (
@@ -80,6 +82,8 @@ export interface SmartMaterial {
   preview: string;
   layers: SmartLayerSpec[];
   custom?: boolean;
+  /** the user's own category in their library (free text) */
+  group?: string;
 }
 
 /** Layers of the cel-shaded (comic-book) smart materials, bottom → top. */

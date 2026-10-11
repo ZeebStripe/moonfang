@@ -481,6 +481,6 @@ export function saveSmartMaterialDialog(app: App) {
   const close = openModal('Save as Smart Material', body, [go]);
   go.addEventListener('click', () => {
     if (!picked.size) return app.toast('Pick at least one layer.', 'warn');
-    if (app.saveLayersAsSmartMaterial([...picked], name.value.trim() || 'My Smart Material')) close();
+    if (app.saveLayersAsSmartMaterial([...picked], name.value.trim() || 'My Smart Material', group?.id)) close();
   });
 }

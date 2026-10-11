@@ -17,7 +17,6 @@ export function renderMaterialThumbnails(
   materials: (MaterialValues | ThumbnailInput)[],
   size = 88,
 ): string[] {
-  const rt = new THREE.WebGLRenderTarget(size, size, { type: THREE.FloatType, samples: 4 });
   const scene = new THREE.Scene();
   scene.environment = environment;
   const mat = new THREE.MeshStandardMaterial();
@@ -30,13 +29,7 @@ export function renderMaterialThumbnails(
   light.position.set(-2, 3, 2);
   scene.add(light);
 
-  const px = new Float32Array(size * size * 4);
-  const canvas = document.createElement('canvas');
-  canvas.width = canvas.height = size;
-  const ctx = canvas.getContext('2d')!;
-  const img = ctx.createImageData(size, size);
   const urls: string[] = [];
-  const prevClear = renderer.getClearAlpha();
   const temp: THREE.Texture[] = [];
   const view = (t: THREE.Texture | null | undefined, srgb: boolean, tiling: number) => {
     if (!t) return null;
@@ -59,33 +52,42 @@ export function renderMaterialThumbnails(
     mat.roughnessMap = view(input.roughness, false, tiling);
     mat.metalnessMap = view(input.metallic, false, tiling);
     mat.needsUpdate = true;
-    renderer.setRenderTarget(rt);
-    renderer.setClearColor(0x000000, 0);
-    renderer.clear();
-    renderer.render(scene, cam);
-    renderer.readRenderTargetPixels(rt, 0, 0, size, size, px);
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        const s = ((size - 1 - y) * size + x) * 4;
-        const d = (y * size + x) * 4;
-        const a = px[s + 3];
-        for (let c = 0; c < 3; c++) {
-          const lin = a > 0 ? px[s + c] / a : 0;
-          img.data[d + c] = Math.round(255 * toSrgb(filmic(lin)));
-        }
-        img.data[d + 3] = Math.round(255 * Math.min(1, a));
-      }
-    }
-    ctx.putImageData(img, 0, 0);
-    urls.push(canvas.toDataURL());
+    urls.push(sceneThumbnail(renderer, scene, cam, size));
   }
-  renderer.setClearColor(0x000000, prevClear);
-  renderer.setRenderTarget(null);
-  rt.dispose();
   temp.forEach((t) => t.dispose());
   ball.geometry.dispose();
   mat.dispose();
   return urls;
+}
+
+/** Renders a scene into a small transparent image (same tone curve as the material thumbnails). */
+export function sceneThumbnail(renderer: THREE.WebGLRenderer, scene: THREE.Scene, camera: THREE.Camera, size = 88): string {
+  const rt = new THREE.WebGLRenderTarget(size, size, { type: THREE.FloatType, samples: 4 });
+  const px = new Float32Array(size * size * 4);
+  const prevClear = renderer.getClearAlpha();
+  renderer.setRenderTarget(rt);
+  renderer.setClearColor(0x000000, 0);
+  renderer.clear();
+  renderer.render(scene, camera);
+  renderer.readRenderTargetPixels(rt, 0, 0, size, size, px);
+  renderer.setClearColor(0x000000, prevClear);
+  renderer.setRenderTarget(null);
+  rt.dispose();
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d')!;
+  const img = ctx.createImageData(size, size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const s = ((size - 1 - y) * size + x) * 4;
+      const d = (y * size + x) * 4;
+      const a = px[s + 3];
+      for (let c = 0; c < 3; c++) img.data[d + c] = Math.round(255 * toSrgb(filmic(a > 0 ? px[s + c] / a : 0)));
+      img.data[d + 3] = Math.round(255 * Math.min(1, a));
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  return canvas.toDataURL();
 }
 
 function filmic(x: number) {

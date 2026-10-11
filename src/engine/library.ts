@@ -279,8 +279,9 @@ export class Library {
 
   constructor(private store: TextureStore) {}
 
-  onChange(fn: () => void) {
+  onChange(fn: () => void): () => void {
     this.listeners.add(fn);
+    return () => this.listeners.delete(fn);
   }
   private changed() {
     for (const fn of this.listeners) fn();
@@ -341,6 +342,29 @@ export class Library {
   addTip(tip: { id: string; name: string; assetId: string }) {
     this.tips = [...this.tips.filter((t) => t.id !== tip.id), tip];
     this.changed();
+  }
+
+  /** Changes a user material's or smart material's name / category. */
+  update(id: string, patch: { name?: string; group?: string }) {
+    const apply = <T extends { id: string; name: string; group?: string }>(x: T): T =>
+      x.id !== id ? x : { ...x, ...(patch.name !== undefined && { name: patch.name.trim() || x.name }), ...(patch.group !== undefined && { group: patch.group.trim() || undefined }) };
+    this.materials = this.materials.map(apply);
+    this.smart = this.smart.map(apply);
+    this.changed();
+  }
+
+  /** Adds an editable copy of any material or smart material (built-in or the user's own). */
+  duplicate(item: MaterialPreset | SmartMaterial): MaterialPreset | SmartMaterial {
+    const stamp = `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 5)}`;
+    const name = `${item.name} copy`;
+    if ('layers' in item) {
+      const copy: SmartMaterial = { ...structuredClone(item), id: `user_sm_${stamp}`, name, custom: true };
+      this.addSmart(copy);
+      return copy;
+    }
+    const copy: MaterialPreset = { ...structuredClone(item), id: `user_${stamp}`, name, category: 'Custom', custom: true };
+    this.addMaterial(copy);
+    return copy;
   }
 
   remove(id: string) {

@@ -60,7 +60,15 @@ The app isn't among the repository's files above; it is only on the Releases pag
   - Import **PBR texture sets** (for example from ambientCG or Poly Haven). Maps are detected from file names: `BaseColor/Albedo/Diffuse`, `Roughness` (or `Gloss`, which is inverted), `Metallic`, `Height/Displacement`, `Normal` (OpenGL, or DirectX when the name contains `DX`), and packed `ARM/ORM`.
   - Textured materials are projected **triplanar** in object space, so they are seamless across UV seams. You can paint with them or use them as fill layers, with adjustable tiling and a color tint.
   - Save a fill layer as a material, or a set of fill layers (with their generator masks) as a **smart material**.
-  - Your library is stored in the browser (IndexedDB). Export or import it as `.mflib` (a zip with the images) or as plain `.json`. Projects embed the textures they use.
+  - **Edit and update**: a layer or folder added from one of your materials remembers it. Change it in the layer
+    properties and press **Update** to save the changes back to your library, or save it as a new one.
+  - **Start from a built-in**: right-click any built-in material or smart material → *Make an editable copy*.
+  - **Library ▾ → Manage my library…**: rename, sort into categories (shown as groups on the shelf), duplicate,
+    export and delete. Right-click your own items on the shelf for the same options.
+  - **Share**: export one item, a selection or your whole library as a `.mflib` file (a zip with the images). Anyone
+    can import it with *Library ▾ → Import* or by dropping it onto Moonfang. Plain `.json` libraries import too.
+  - Smart materials show a **rendered preview** on the shelf, made on a small cube with its own baked maps.
+  - Your library is stored on your computer (IndexedDB). Projects embed the textures they use.
 - **Smart masks**: one-click generator presets.
 - **Viewport**:
   - PBR preview with image-based lighting (built-in studio or your own `.hdr`)

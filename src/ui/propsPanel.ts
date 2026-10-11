@@ -1,11 +1,12 @@
 import type { App } from '../app';
 import { BLEND_MODES, GEN_LABELS, GEN_TYPES, MAP_KEYS, defaultGenerator, hasMaps, type ChannelKey, type FillLayer, type Layer, type MaterialMaps, type MaterialValues, type ChannelSet } from '../engine/layers';
 import type { TextureStore } from '../engine/library';
-import { displaySettings, saveMaterialDialog } from './actions';
+import { displaySettings, saveMaterialDialog, saveSmartMaterialDialog } from './actions';
 import { checkbox, colorField, h, iconButton, section, selectField, slider } from './dom';
 import { ICONS } from './icons';
 import { brushTipControls, stencilControls } from './brushUI';
 import { FACE_MODES } from '../engine/faceSelect';
+import { MATERIALS, SMART_MATERIALS } from '../data/materials';
 
 const CHANNEL_LABELS: Record<ChannelKey, string> = {
   color: 'Base Color',
@@ -207,6 +208,7 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
         opacity,
         folderColors(l),
         h('div', { class: 'dim small' }, 'The folder’s layers are composited together, then blended over the layers below through the folder’s mask and opacity.'),
+        libraryLink(l, 'smart'),
       );
     }
     const parts: (HTMLElement | null)[] = [
@@ -234,8 +236,8 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
           'div',
           { class: 'row' },
           h('button', { class: 'btn small', onclick: () => ((l.seed = Math.random() * 100), changed()) }, 'New random seed'),
-          h('button', { class: 'btn small', onclick: () => saveMaterialDialog(app), title: 'Add this fill material to your library' }, 'Save as material…'),
         ),
+        libraryLink(l, 'material'),
       );
     } else {
       parts.push(
@@ -248,6 +250,40 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
       );
     }
     return section(`Layer · ${l.name}`, ...parts);
+  }
+
+  /**
+   * Saving back to the library: "Update" when the layer / folder came from one of the user's own items, otherwise
+   * (built-in or never saved) only "Save as new".
+   */
+  function libraryLink(l: Layer, kind: 'material' | 'smart'): HTMLElement {
+    const src = app.librarySource(l);
+    const what = kind === 'smart' ? 'smart material' : 'material';
+    const saveNew = h(
+      'button',
+      { class: 'btn small', onclick: () => (kind === 'smart' ? saveSmartMaterialDialog(app) : saveMaterialDialog(app)), title: `Add it to your library as a new ${what}` },
+      src ? `Save as new ${what}…` : `Save as ${what}…`,
+    );
+    if (!src) {
+      const id = l.source?.id;
+      const builtin = !!id && (kind === 'smart' ? SMART_MATERIALS : MATERIALS).some((x) => x.id === id);
+      return h(
+        'div',
+        { class: 'lib-link' },
+        builtin ? h('div', { class: 'dim small' }, `From a built-in ${what}. Save it as your own to reuse your changes.`) : null,
+        h('div', { class: 'row' }, saveNew),
+      );
+    }
+    const update = h(
+      'button',
+      {
+        class: 'btn small primary',
+        title: `Overwrite “${src.name}” in your library with these settings`,
+        onclick: () => (kind === 'smart' ? app.updateSmartFromFolder(l.id) : app.updateMaterialFromFill(l.id)),
+      },
+      `Update “${src.name}”`,
+    );
+    return h('div', { class: 'lib-link' }, h('div', { class: 'dim small' }, `From your ${what} “${src.name}”.`), h('div', { class: 'row' }, update, saveNew));
   }
 
   /**
@@ -420,5 +456,7 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
     if (k === 'selection' || k === 'brush' || k === 'mesh' || k === 'settings' || k === 'tool') render();
     else if (k === 'faces' || k === 'set') syncFaces();
   });
+  // "Update …" buttons follow renames and deletions in the library.
+  app.library.onChange(() => tab === 'props' && render());
   render();
 }

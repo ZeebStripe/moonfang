@@ -13,6 +13,7 @@ import {
   locateLayer,
   newLayerId,
   walkLayers,
+  type FillLayer,
   type GeneratorParams,
   type Layer,
   type MaterialValues,
@@ -27,6 +28,7 @@ import { collectProjectFiles, projectSets, readProject, restoreLayers } from './
 import { zipSync } from 'fflate';
 import { Viewport } from './engine/viewport';
 import { FacePicker, FaceSelection, subsetGeometry, type FaceMode, type TriRange } from './engine/faceSelect';
+import { SmartPreviews } from './engine/smartPreview';
 import { disposeMeshEdges, loadMeshSource } from './engine/meshLoader';
 import { MATERIALS, type MaterialPreset, type SmartLayerSpec, type SmartMaterial } from './data/materials';
 import { importTextureSet, Library, makeAsset, mapTextureIds, TextureStore } from './engine/library';
@@ -156,6 +158,8 @@ export class App {
   textures = new TextureStore();
   /** the user's own materials and smart materials (IndexedDB) */
   library = new Library(this.textures);
+  /** rendered shelf previews of smart materials */
+  smartPreviews: SmartPreviews;
 
   private ready = false;
   private pendingStamps: Stamp[] = [];
@@ -189,6 +193,14 @@ export class App {
     };
     this.painter = new Painter(this.renderer, this.fs, this.copier);
     this.picker = new FacePicker(this.renderer);
+    this.smartPreviews = new SmartPreviews({
+      renderer: this.renderer,
+      fs: this.fs,
+      store: this.textures,
+      environment: () => this.viewport.scene.environment,
+      build: (sm, size) => this.buildSmartLayers(sm, size),
+      idle: () => this.ready && !this.busy && !this.painter.isPainting && !this.contextLost,
+    });
     this.textures.onLoad(() => this.invalidate(true));
     // Library contents (e.g. imported brush tips) appear in the brush panel.
     this.library.onChange(() => this.emit('brush'));
@@ -771,6 +783,7 @@ export class App {
   addFillLayer(preset?: MaterialPreset, mask: LayerMask | null = null) {
     const l = createFillLayer(preset ? preset.name : this.nextName('Fill'), preset?.values ?? DEFAULT_VALUES);
     l.mask = mask;
+    if (preset) l.source = { kind: 'material', id: preset.id };
     if (preset?.variation) l.variation = preset.variation;
     if (preset?.maps) {
       l.maps = cloneMaps(preset.maps);
@@ -791,6 +804,17 @@ export class App {
   }
 
   addSmartMaterial(sm: SmartMaterial, mask: LayerMask | null = null) {
+    const created = this.buildSmartLayers(sm, this.texSize);
+    // A smart material arrives as a folder, which remembers where it came from (see updateSmartFromFolder).
+    const folder = createGroup(sm.name, created);
+    folder.mask = mask;
+    folder.source = { kind: 'smart', id: sm.id };
+    this.insertAboveSelected(mask ? 'Assign smart material to faces' : 'Add smart material', folder);
+    this.toast(`Added smart material "${sm.name}" (${created.length} layers)`);
+  }
+
+  /** A smart material's fill layers (bottom → top), with generator masks of `size`². */
+  buildSmartLayers(sm: SmartMaterial, size: number): Layer[] {
     const created: Layer[] = sm.layers.map((spec) => {
       const preset = this.findMaterial(spec.material);
       const values: MaterialValues = { ...DEFAULT_VALUES, ...preset?.values, ...spec.values };
@@ -808,7 +832,7 @@ export class App {
       if (spec.heightBlend) l.heightBlend = spec.heightBlend;
       if (spec.generator) {
         l.mask = {
-          rt: createMaskRT(this.renderer, this.texSize, 1),
+          rt: createMaskRT(this.renderer, size, 1),
           enabled: true,
           generator: { ...defaultGenerator(spec.generator.type), ...spec.generator },
         };
@@ -816,11 +840,7 @@ export class App {
       return l;
     });
     this.renderer.setRenderTarget(null);
-    // A smart material arrives as a folder.
-    const folder = createGroup(sm.name, created);
-    folder.mask = mask;
-    this.insertAboveSelected(mask ? 'Assign smart material to faces' : 'Add smart material', folder);
-    this.toast(`Added smart material "${sm.name}" (${created.length} layers)`);
+    return created;
   }
 
   deleteLayer(id: number) {
@@ -981,61 +1001,62 @@ export class App {
   saveFillAsMaterial(id: number, name?: string) {
     const l = this.findLayer(id);
     if (!l || l.kind !== 'fill') return;
-    const m: MaterialPreset = {
-      id: `user_${Date.now().toString(36)}`,
-      name: name || l.name,
-      category: 'Custom',
-      values: { ...l.values, color: [...l.values.color] as [number, number, number] },
-      variation: l.variation,
-      maps: l.maps ? cloneMaps(l.maps) : undefined,
-      tiling: l.tiling,
-      custom: true,
-    };
+    const m: MaterialPreset = { id: `user_${Date.now().toString(36)}`, name: name || l.name, category: 'Custom', custom: true, ...materialOf(l) };
     this.library.addMaterial(m);
+    l.source = { kind: 'material', id: m.id };
+    this.emit('selection');
     this.toast(`Saved material "${m.name}" to your library`);
+  }
+
+  /** The user's library item a layer or folder came from (null for built-ins, or when it was deleted). */
+  librarySource(l: Layer): MaterialPreset | SmartMaterial | null {
+    const s = l.source;
+    if (!s) return null;
+    return (s.kind === 'material' ? this.library.materials : this.library.smart).find((x) => x.id === s.id) ?? null;
+  }
+
+  /** Writes a fill layer's current settings back into the library material it came from. */
+  updateMaterialFromFill(id: number) {
+    const l = this.findLayer(id);
+    const src = l && this.librarySource(l);
+    if (!l || l.kind !== 'fill' || !src || 'layers' in src) return;
+    this.library.addMaterial({ ...src, ...materialOf(l) });
+    this.toast(`Updated material "${src.name}"`);
+  }
+
+  /** Writes a folder's fill layers (with their generator masks) back into the smart material it came from. */
+  updateSmartFromFolder(id: number) {
+    const l = this.findLayer(id);
+    const src = l && this.librarySource(l);
+    if (!l || l.kind !== 'group' || !src || !('layers' in src)) return;
+    const all = [...walkLayers(l.children)].filter((x) => x.kind !== 'group');
+    const fills = all.filter((x): x is FillLayer => x.kind === 'fill');
+    if (!fills.length) return this.toast('This folder has no fill layers to save.', 'warn');
+    this.library.addSmart({ ...src, layers: smartSpecs(fills), preview: smartSwatch(fills) });
+    const skipped = all.length - fills.length;
+    this.toast(`Updated smart material "${src.name}"${skipped ? ` (${skipped} paint layer(s) skipped)` : ''}`);
   }
 
   /**
    * Turns fill layers (bottom→top, with their generator masks) into a reusable smart material.
    * Paint layers and hand-painted mask pixels are UV-specific and therefore left out.
    */
-  saveLayersAsSmartMaterial(ids: number[], name: string): number {
+  saveLayersAsSmartMaterial(ids: number[], name: string, folderId?: number): number {
     const chosen = this.allLayers.filter((l) => ids.includes(l.id) && l.kind !== 'group');
     const fills = chosen.filter((l): l is Extract<Layer, { kind: 'fill' }> => l.kind === 'fill');
     if (!fills.length) {
       this.toast('Smart materials are built from fill layers — none selected.', 'warn');
       return 0;
     }
-    const layers: SmartLayerSpec[] = fills.map((f) => {
-      // Layers added from a smart material are named "<Smart> · <Layer>"; keep only the layer part.
-      const dot = f.name.lastIndexOf(' · ');
-      return {
-        name: dot >= 0 ? f.name.slice(dot + 3) : f.name,
-        values: { ...f.values, color: [...f.values.color] as [number, number, number] },
-        channels: { ...f.channels },
-        maps: f.maps ? cloneMaps(f.maps) : undefined,
-        tiling: f.tiling,
-        variation: f.variation,
-        variationScale: f.variationScale,
-        opacity: f.opacity,
-        blend: f.blend,
-        heightBlend: f.heightBlend,
-        generator: f.mask?.enabled && f.mask.generator ? { ...f.mask.generator } : undefined,
-      };
-    });
-    const colors = fills
-      .map((f) => `rgb(${f.values.color.map((v) => Math.round(v * 255)).join(',')})`)
-      .reverse()
-      .slice(0, 3);
-    while (colors.length < 3) colors.push(colors[colors.length - 1]);
-    const sm: SmartMaterial = {
-      id: `user_sm_${Date.now().toString(36)}`,
-      name,
-      preview: `radial-gradient(circle at 35% 30%, ${colors[0]} 0 38%, ${colors[1]} 39% 62%, ${colors[2]} 63%)`,
-      layers,
-      custom: true,
-    };
+    const layers = smartSpecs(fills);
+    const sm: SmartMaterial = { id: `user_sm_${Date.now().toString(36)}`, name, preview: smartSwatch(fills), layers, custom: true };
     this.library.addSmart(sm);
+    // The folder it was made from can now update it.
+    const folder = folderId === undefined ? null : this.findLayer(folderId);
+    if (folder?.kind === 'group') {
+      folder.source = { kind: 'smart', id: sm.id };
+      this.emit('selection');
+    }
     const skipped = chosen.length - fills.length;
     this.toast(`Saved smart material "${name}" (${layers.length} layers${skipped ? `, ${skipped} paint layer(s) skipped` : ''})`);
     return layers.length;
@@ -1377,6 +1398,42 @@ export class App {
     }
     return img;
   }
+}
+
+/** The library material a fill layer represents. */
+function materialOf(l: FillLayer): Pick<MaterialPreset, 'values' | 'variation' | 'maps' | 'tiling'> {
+  return { values: structuredClone(l.values), variation: l.variation, maps: l.maps ? cloneMaps(l.maps) : undefined, tiling: l.tiling };
+}
+
+/** Smart material layer specs from fill layers (bottom → top) and their generator masks. */
+function smartSpecs(fills: FillLayer[]): SmartLayerSpec[] {
+  return fills.map((f) => {
+    // Layers added from a smart material are named "<Smart> · <Layer>"; keep only the layer part.
+    const dot = f.name.lastIndexOf(' · ');
+    return {
+      name: dot >= 0 ? f.name.slice(dot + 3) : f.name,
+      values: structuredClone(f.values),
+      channels: { ...f.channels },
+      maps: f.maps ? cloneMaps(f.maps) : undefined,
+      tiling: f.tiling,
+      variation: f.variation,
+      variationScale: f.variationScale,
+      opacity: f.opacity,
+      blend: f.blend,
+      heightBlend: f.heightBlend,
+      generator: f.mask?.enabled && f.mask.generator ? { ...f.mask.generator } : undefined,
+    };
+  });
+}
+
+/** Flat colour swatch shown until the rendered preview is ready. */
+function smartSwatch(fills: FillLayer[]): string {
+  const colors = fills
+    .map((f) => `rgb(${f.values.color.map((v) => Math.round(v * 255)).join(',')})`)
+    .reverse()
+    .slice(0, 3);
+  while (colors.length < 3) colors.push(colors[colors.length - 1]);
+  return `radial-gradient(circle at 35% 30%, ${colors[0]} 0 38%, ${colors[1]} 39% 62%, ${colors[2]} 63%)`;
 }
 
 function cloneMaps<T extends object>(m: T): T {

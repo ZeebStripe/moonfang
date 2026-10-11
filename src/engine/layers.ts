@@ -86,6 +86,13 @@ interface LayerBase {
   blend: BlendMode;
   heightBlend: HeightBlend;
   mask: LayerMask | null;
+  /** the library item this layer (a fill) or folder (a smart material) was added from, so it can be updated */
+  source?: LayerSource;
+}
+
+export interface LayerSource {
+  kind: 'material' | 'smart';
+  id: string;
 }
 
 export interface PaintLayer extends LayerBase {

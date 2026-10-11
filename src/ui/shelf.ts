@@ -1,9 +1,10 @@
 import type { App } from '../app';
-import { MATERIALS, SMART_MASKS, SMART_MATERIALS, type MaterialPreset } from '../data/materials';
+import { MATERIALS, SMART_MASKS, SMART_MATERIALS, type MaterialPreset, type SmartMaterial } from '../data/materials';
 import { renderMaterialThumbnails } from '../engine/thumbnails';
 import { exportLibraryAction, importLibraryAction, importTextureSetAction, saveMaterialDialog, saveSmartMaterialDialog } from './actions';
 import { h, icon } from './dom';
 import { ICONS } from './icons';
+import { customMaterialThumb, itemMenu, libraryManagerDialog, menuItem, popupMenu, sortByGroup } from './libraryUI';
 
 type ShelfTab = 'materials' | 'smart' | 'masks';
 
@@ -11,8 +12,6 @@ export function mountShelf(app: App, root: HTMLElement) {
   let tab: ShelfTab = 'materials';
   let filter = '';
   let builtinThumbs: string[] | null = null;
-  /** custom material thumbnails, keyed by id (only cached once all their textures are decoded) */
-  const customThumbs = new Map<string, string>();
 
   const tabs = h('div', { class: 'shelf-tabs' });
   const search = h('input', {
@@ -26,36 +25,30 @@ export function mountShelf(app: App, root: HTMLElement) {
   }) as HTMLInputElement;
   const hint = h('span', { class: 'shelf-hint dim' });
   const libBtn = h('button', { class: 'btn small', title: 'Import / export your own materials' }, 'Library ▾');
-  libBtn.addEventListener('click', () => openLibraryMenu(libBtn));
+  libBtn.addEventListener('click', () => {
+    if (document.querySelector('.popup-menu')) return;
+    const r = libBtn.getBoundingClientRect();
+    const run = (fn: () => void) => () => (close(), fn());
+    const close = popupMenu(
+      [
+        menuItem('Manage my library…', run(() => libraryManagerDialog(app)), 'Rename, categorise, duplicate, export or delete your materials'),
+        h('div', { class: 'menu-sep' }),
+        h('div', { class: 'menu-heading' }, 'Import'),
+        menuItem('Texture set (images)…', run(() => void importTextureSetAction(app)), 'Select BaseColor / Roughness / Metallic / Height (or ARM) images of one material'),
+        menuItem('Library file (.mflib / .json)…', run(() => void importLibraryAction(app))),
+        h('div', { class: 'menu-sep' }),
+        h('div', { class: 'menu-heading' }, 'Save'),
+        menuItem('Selected fill layer as material…', run(() => saveMaterialDialog(app))),
+        menuItem('Layers as smart material…', run(() => saveSmartMaterialDialog(app))),
+        h('div', { class: 'menu-sep' }),
+        menuItem('Export my whole library (.mflib)…', run(() => exportLibraryAction(app))),
+      ],
+      { left: r.left, bottom: window.innerHeight - r.top + 4 },
+      libBtn,
+    );
+  });
   const grid = h('div', { class: 'shelf-grid' });
   root.append(h('div', { class: 'shelf-head' }, tabs, hint, libBtn, search), grid);
-
-  function openLibraryMenu(anchor: HTMLElement) {
-    if (document.querySelector('.popup-menu')) return;
-    const item = (label: string, fn: () => void, title?: string) => h('button', { title, onclick: () => (close(), fn()) }, label);
-    const menu = h(
-      'div',
-      { class: 'popup-menu' },
-      h('div', { class: 'menu-heading' }, 'Import'),
-      item('Texture set (images)…', () => void importTextureSetAction(app), 'Select BaseColor / Roughness / Metallic / Height (or ARM) images of one material'),
-      item('Library file (.mflib / .json)…', () => void importLibraryAction(app)),
-      h('div', { class: 'menu-sep' }),
-      h('div', { class: 'menu-heading' }, 'Save'),
-      item('Selected fill layer as material…', () => saveMaterialDialog(app)),
-      item('Layers as smart material…', () => saveSmartMaterialDialog(app)),
-      h('div', { class: 'menu-sep' }),
-      item('Export my library (.mflib)…', () => exportLibraryAction(app)),
-    );
-    const r = anchor.getBoundingClientRect();
-    Object.assign(menu.style, { left: `${r.left}px`, bottom: `${window.innerHeight - r.top + 4}px` });
-    const close = () => {
-      menu.remove();
-      document.removeEventListener('mousedown', outside, true);
-    };
-    const outside = (e: MouseEvent) => !menu.contains(e.target as Node) && e.target !== anchor && close();
-    document.addEventListener('mousedown', outside, true);
-    document.body.append(menu);
-  }
 
   function renderTabs() {
     const t = (id: ShelfTab, label: string) => h('button', { class: `tab ${tab === id ? 'active' : ''}`, onclick: () => ((tab = id), renderTabs(), renderGrid()) }, label);
@@ -68,10 +61,17 @@ export function mountShelf(app: App, root: HTMLElement) {
     }[tab];
   }
 
-  function tile(label: string, preview: HTMLElement, onClick: () => void, extras: (HTMLElement | null)[] = [], title?: string) {
+  function tile(label: string, preview: HTMLElement, onClick: () => void, extras: (HTMLElement | null)[] = [], title?: string, onMenu?: (e: MouseEvent) => void) {
     return h(
       'div',
-      { class: 'tile', title: title ?? label, onclick: onClick, tabindex: 0, onkeydown: (e: KeyboardEvent) => e.key === 'Enter' && onClick() },
+      {
+        class: 'tile',
+        title: title ?? label,
+        onclick: onClick,
+        oncontextmenu: onMenu,
+        tabindex: 0,
+        onkeydown: (e: KeyboardEvent) => e.key === 'Enter' && onClick(),
+      },
       preview,
       h('span', { class: 'tile-label' }, label),
       ...extras,
@@ -91,24 +91,6 @@ export function mountShelf(app: App, root: HTMLElement) {
       },
       icon(ICONS.close),
     );
-  }
-
-  function thumbFor(m: MaterialPreset): string | null {
-    if (!m.custom) return null;
-    const cached = customThumbs.get(m.id);
-    if (cached) return cached;
-    if (!app.textures.ready(m.maps)) return null;
-    const [url] = renderMaterialThumbnails(app.renderer, app.viewport.scene.environment, [
-      {
-        values: m.values,
-        color: app.textures.get(m.maps?.color),
-        roughness: m.maps?.gloss ? null : app.textures.get(m.maps?.roughness),
-        metallic: app.textures.get(m.maps?.metallic),
-        tiling: m.tiling,
-      },
-    ]);
-    customThumbs.set(m.id, url);
-    return url;
   }
 
   function materialTile(m: MaterialPreset, img: string | null) {
@@ -138,37 +120,57 @@ export function mountShelf(app: App, root: HTMLElement) {
         m.custom ? deleteButton(m.id, m.name) : null,
         m.maps ? h('span', { class: 'tile-badge', title: 'Texture-based material' }, 'TEX') : null,
       ],
-      `${m.name} (${m.category})`,
+      `${m.name} (${m.custom ? (m.group ?? 'My materials') : m.category}) · right-click for more`,
+      (e) => itemMenu(app, m, e),
     );
+  }
+
+  function smartTile(s: SmartMaterial) {
+    const url = app.smartPreviews.get(s);
+    return tile(
+      s.name,
+      url ? h('img', { src: url, alt: '', draggable: false }) : h('div', { class: 'swatch', style: { background: s.preview } }),
+      () => {
+        if (!app.mesh) return app.toast('Load a mesh first.', 'warn');
+        if (app.tool === 'select') app.assignSmartMaterialToFaces(s);
+        else app.addSmartMaterial(s);
+      },
+      [s.custom ? deleteButton(s.id, s.name) : null],
+      `${s.name}: ${s.layers.map((l) => l.name).join(', ')} · right-click for more`,
+      (e) => itemMenu(app, s, e),
+    );
+  }
+
+  /** The user's items under "My …" headings, one per category. */
+  function grouped<T extends MaterialPreset | SmartMaterial>(items: T[], title: string, make: (x: T) => HTMLElement): HTMLElement[] {
+    const out: HTMLElement[] = [];
+    let last: string | undefined | null = null;
+    for (const x of sortByGroup(items)) {
+      if (x.group !== last) out.push(h('div', { class: 'shelf-group' }, x.group ? `${title} · ${x.group}` : title));
+      last = x.group;
+      out.push(make(x));
+    }
+    return out;
   }
 
   function renderGrid() {
     const match = (s: string) => !filter || s.toLowerCase().includes(filter);
     if (tab === 'materials') {
       builtinThumbs ??= renderMaterialThumbnails(app.renderer, app.viewport.scene.environment, MATERIALS.map((m) => m.values));
-      const custom = app.library.materials.filter((m) => match(m.name) || match('custom'));
+      const custom = app.library.materials.filter((m) => match(m.name) || match(m.group ?? '') || match('custom'));
       const builtin = MATERIALS.map((m, i) => ({ m, i })).filter(({ m }) => match(m.name) || match(m.category));
       grid.replaceChildren(
-        ...(custom.length ? [h('div', { class: 'shelf-group' }, 'My materials'), ...custom.map((m) => materialTile(m, thumbFor(m)))] : []),
+        ...grouped(custom, 'My materials', (m) => materialTile(m, customMaterialThumb(app, m))),
         ...(custom.length ? [h('div', { class: 'shelf-group' }, 'Built-in')] : []),
         ...builtin.map(({ m, i }) => materialTile(m, builtinThumbs![i])),
       );
     } else if (tab === 'smart') {
-      const all = [...app.library.smart, ...SMART_MATERIALS].filter((s) => match(s.name));
+      const custom = app.library.smart.filter((s) => match(s.name) || match(s.group ?? ''));
+      const builtin = SMART_MATERIALS.filter((s) => match(s.name));
       grid.replaceChildren(
-        ...all.map((s) =>
-          tile(
-            s.name,
-            h('div', { class: 'swatch', style: { background: s.preview } }),
-            () => {
-              if (!app.mesh) return app.toast('Load a mesh first.', 'warn');
-              if (app.tool === 'select') app.assignSmartMaterialToFaces(s);
-              else app.addSmartMaterial(s);
-            },
-            [s.custom ? deleteButton(s.id, s.name) : null],
-            `${s.name}: ${s.layers.map((l) => l.name).join(', ')}`,
-          ),
-        ),
+        ...grouped(custom, 'My smart materials', smartTile),
+        ...(custom.length ? [h('div', { class: 'shelf-group' }, 'Built-in')] : []),
+        ...builtin.map(smartTile),
       );
     } else {
       grid.replaceChildren(
@@ -184,16 +186,15 @@ export function mountShelf(app: App, root: HTMLElement) {
     }
   }
 
-  app.library.onChange(() => {
-    for (const id of customThumbs.keys()) if (!app.library.materials.some((m) => m.id === id)) customThumbs.delete(id);
-    renderGrid();
-  });
-  // A custom material's thumbnail can only be rendered once its images are decoded.
+  // Library changes, decoded texture images (custom thumbnails need them) and finished smart material previews.
   let pending = 0;
-  app.textures.onLoad(() => {
-    cancelAnimationFrame(pending);
-    pending = requestAnimationFrame(renderGrid);
-  });
+  const later = () => {
+    clearTimeout(pending);
+    pending = window.setTimeout(renderGrid, 30);
+  };
+  app.library.onChange(later);
+  app.textures.onLoad(later);
+  app.smartPreviews.onUpdate(() => tab === 'smart' && later());
 
   app.on((k) => k === 'tool' && renderTabs());
   renderTabs();
