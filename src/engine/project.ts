@@ -18,7 +18,7 @@ import type { BakeSettings } from './meshMaps';
 import type { CompositeSettings } from './compositor';
 import type { BrushSettings } from './painter';
 
-export const PROJECT_FORMAT = 'moonfang-project';
+const PROJECT_FORMAT = 'moonfang-project';
 /** 2 = per-texture-set layer stacks (version 1 had a single stack at the top level). */
 const VERSION = 2;
 
