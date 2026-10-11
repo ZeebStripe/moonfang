@@ -60,9 +60,10 @@ export function mountShelf(app: App, root: HTMLElement) {
   function renderTabs() {
     const t = (id: ShelfTab, label: string) => h('button', { class: `tab ${tab === id ? 'active' : ''}`, onclick: () => ((tab = id), renderTabs(), renderGrid()) }, label);
     tabs.replaceChildren(t('materials', 'Materials'), t('smart', 'Smart Materials'), t('masks', 'Smart Masks'));
+    const faces = app.tool === 'select';
     hint.textContent = {
-      materials: 'Click: use on brush · + : add as fill layer',
-      smart: 'Click: add layers above the selection',
+      materials: faces ? 'Click: assign to the selected faces · + : add as fill layer' : 'Click: use on brush · + : add as fill layer',
+      smart: faces ? 'Click: assign to the selected faces' : 'Click: add layers above the selection',
       masks: 'Click: apply to the selected layer’s mask',
     }[tab];
   }
@@ -115,6 +116,7 @@ export function mountShelf(app: App, root: HTMLElement) {
       m.name,
       img ? h('img', { src: img, alt: '', draggable: false }) : h('div', { class: 'swatch loading' }),
       () => {
+        if (app.tool === 'select') return app.assignMaterialToFaces(m);
         app.setBrushMaterial(m);
         app.setTool('paint');
         app.toast(`Brush material: ${m.name}`);
@@ -160,7 +162,8 @@ export function mountShelf(app: App, root: HTMLElement) {
             h('div', { class: 'swatch', style: { background: s.preview } }),
             () => {
               if (!app.mesh) return app.toast('Load a mesh first.', 'warn');
-              app.addSmartMaterial(s);
+              if (app.tool === 'select') app.assignSmartMaterialToFaces(s);
+              else app.addSmartMaterial(s);
             },
             [s.custom ? deleteButton(s.id, s.name) : null],
             `${s.name}: ${s.layers.map((l) => l.name).join(', ')}`,
@@ -192,6 +195,7 @@ export function mountShelf(app: App, root: HTMLElement) {
     pending = requestAnimationFrame(renderGrid);
   });
 
+  app.on((k) => k === 'tool' && renderTabs());
   renderTabs();
   // Thumbnails need the environment map, which exists once the viewport is constructed.
   requestAnimationFrame(renderGrid);

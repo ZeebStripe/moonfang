@@ -126,13 +126,15 @@ export function mountTopbar(app: App, root: HTMLElement) {
 export function mountToolbar(app: App, root: HTMLElement) {
   const paint = iconButton(ICONS.brush, 'Paint (B)', () => app.setTool('paint'), 'tool');
   const erase = iconButton(ICONS.eraser, 'Erase (E)', () => app.setTool('erase'), 'tool');
+  const faces = iconButton(ICONS.polyFill, 'Polygon fill: select faces and assign materials (P)', () => app.setTool('select'), 'tool');
   const undo = iconButton(ICONS.undo, 'Undo (Ctrl+Z)', () => app.undo());
   const redo = iconButton(ICONS.redo, 'Redo (Ctrl+Shift+Z)', () => app.redo());
   const frame = iconButton(ICONS.frame, 'Frame model (F)', () => app.viewport.frame());
-  root.append(paint, erase, h('div', { class: 'tool-sep' }), undo, redo, h('div', { class: 'tool-sep' }), frame);
+  root.append(paint, erase, faces, h('div', { class: 'tool-sep' }), undo, redo, h('div', { class: 'tool-sep' }), frame);
   const sync = () => {
     paint.classList.toggle('active', app.tool === 'paint');
     erase.classList.toggle('active', app.tool === 'erase');
+    faces.classList.toggle('active', app.tool === 'select');
     undo.disabled = !app.canUndo;
     redo.disabled = !app.canRedo;
     undo.title = app.undoLabel ? `Undo ${app.undoLabel} (Ctrl+Z)` : 'Undo (Ctrl+Z)';
@@ -143,13 +145,16 @@ export function mountToolbar(app: App, root: HTMLElement) {
 }
 
 export function mountStatusbar(app: App, root: HTMLElement) {
-  const left = h('span', {}, 'LMB paint · Alt+LMB / MMB orbit · RMB pan · Wheel zoom · Ctrl+RMB drag brush size / hardness · ? shortcuts');
+  const PAINT_HINT = 'LMB paint · Alt+LMB / MMB orbit · RMB pan · Wheel zoom · Ctrl+RMB drag brush size / hardness · ? shortcuts';
+  const FACE_HINT = 'LMB select faces · Ctrl+LMB deselect · Shift+drag box select · 1–4 mode · Esc clear · Alt+LMB orbit · ? shortcuts';
+  const left = h('span', {}, PAINT_HINT);
   const right = h('span', { class: 'dim' });
   root.append(left, h('div', { class: 'spacer' }), right);
   const gl = app.renderer.getContext();
   const dbg = gl.getExtension('WEBGL_debug_renderer_info');
   const gpu = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)).replace(/^ANGLE \((.*)\)$/, '$1').split(',').slice(0, 2).join(',') : '';
   const sync = () => {
+    left.textContent = app.tool === 'select' ? FACE_HINT : PAINT_HINT;
     const tris = app.mesh ? app.mesh.geometry.attributes.position.count / 3 : 0;
     right.textContent = [app.mesh ? `${app.mesh.name} · ${Math.round(tris).toLocaleString()} tris` : 'No mesh', app.sets.length > 1 ? `set ${app.set.info.name}` : '', `${app.texSize}²`, `${app.allLayers.length} layers`, app.lastAutosave ? `autosaved ${new Date(app.lastAutosave).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '', gpu]
       .filter(Boolean)

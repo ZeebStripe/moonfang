@@ -1,6 +1,7 @@
 import type { App } from '../app';
 import type { Stamp } from '../engine/painter';
 import { VIEW_MODES } from '../engine/viewport';
+import { FACE_MODES } from '../engine/faceSelect';
 import { exportDialog, openMeshDialog, saveProjectAction } from './actions';
 import { saveVersionDialog } from './saves';
 import { h } from './dom';
@@ -121,7 +122,7 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
   });
 
   function updateCursor(e?: PointerEvent) {
-    const show = hover && !altDown && !!app.mesh && !resize;
+    const show = hover && !altDown && !!app.mesh && !resize && app.tool !== 'select';
     cursor.style.display = show ? 'block' : 'none';
     if (!e) return;
     const r = wrap.getBoundingClientRect();
@@ -181,11 +182,91 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
   canvas.addEventListener('pointerup', endResize);
   canvas.addEventListener('pointercancel', endResize);
 
+  // ------------------------------------------------------------------ polygon fill: face selection
+  // Click / drag over faces adds them (Ctrl removes); Shift+drag selects the visible faces in a box.
+  const boxEl = h('div', { class: 'face-box' });
+  wrap.append(boxEl);
+  let picking: { id: number; op: 'add' | 'remove'; box: boolean; cx: number; cy: number; x: number; y: number; last: number } | null = null;
+  let hoverTri = -1;
+  const setHover = (t: number) => {
+    if (t === hoverTri) return;
+    hoverTri = t;
+    app.hoverFaces(t < 0 ? null : app.expandFaces([t]));
+  };
+  wrap.addEventListener(
+    'pointerdown',
+    (e) => {
+      if (app.tool !== 'select' || e.button !== 0 || e.altKey || stencilKey || picking || e.target !== canvas || !app.mesh) return;
+      e.stopPropagation();
+      e.preventDefault();
+      const b = toBuffer(e);
+      const op = e.ctrlKey || e.metaKey ? 'remove' : 'add';
+      picking = { id: e.pointerId, op, box: e.shiftKey, cx: e.clientX, cy: e.clientY, x: b.x, y: b.y, last: -1 };
+      canvas.setPointerCapture(e.pointerId);
+      if (!picking.box) {
+        picking.last = app.pickFace(b.x, b.y);
+        if (picking.last >= 0) app.selectFaces(app.expandFaces([picking.last]), op);
+      }
+    },
+    true,
+  );
+  canvas.addEventListener('pointermove', (e) => {
+    if (app.tool !== 'select') return;
+    if (!picking) {
+      if (!e.buttons) {
+        const b = toBuffer(e);
+        setHover(app.pickFace(b.x, b.y));
+      }
+      return;
+    }
+    if (e.pointerId !== picking.id) return;
+    if (picking.box) {
+      const r = wrap.getBoundingClientRect();
+      Object.assign(boxEl.style, {
+        display: 'block',
+        left: `${Math.min(e.clientX, picking.cx) - r.left}px`,
+        top: `${Math.min(e.clientY, picking.cy) - r.top}px`,
+        width: `${Math.abs(e.clientX - picking.cx)}px`,
+        height: `${Math.abs(e.clientY - picking.cy)}px`,
+      });
+      boxEl.classList.toggle('remove', picking.op === 'remove');
+      return;
+    }
+    const b = toBuffer(e);
+    const t = app.pickFace(b.x, b.y);
+    if (t >= 0 && t !== picking.last) app.selectFaces(app.expandFaces([t]), picking.op);
+    picking.last = t;
+    setHover(t);
+  });
+  const endPick = (e: PointerEvent) => {
+    if (!picking || e.pointerId !== picking.id) return;
+    const p = picking;
+    picking = null;
+    boxEl.style.display = 'none';
+    if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+    if (!p.box || e.type === 'pointercancel') return;
+    const b = toBuffer(e);
+    // A Shift+click without dragging picks the single face under the cursor.
+    if (Math.hypot(e.clientX - p.cx, e.clientY - p.cy) < 3) {
+      const t = app.pickFace(b.x, b.y);
+      if (t >= 0) app.selectFaces(app.expandFaces([t]), p.op);
+    } else app.selectFaces(app.facesInRect(p.x, p.y, b.x, b.y), p.op);
+    hoverTri = -1;
+  };
+  canvas.addEventListener('pointerup', endPick);
+  canvas.addEventListener('pointercancel', endPick);
+  canvas.addEventListener('pointerleave', () => setHover(-1));
+  app.on((k) => {
+    // The overlay is rebuilt for the new tool / view / set; the hover comes back on the next move.
+    if (k === 'tool' || k === 'view' || k === 'set' || k === 'mesh' || k === 'faces') hoverTri = -1;
+    if (k === 'tool') wrap.classList.toggle('face-select', app.tool === 'select');
+  });
+
   // Capture phase so a painting click never reaches OrbitControls.
   wrap.addEventListener(
     'pointerdown',
     (e) => {
-      if (e.button !== 0 || e.altKey || painting || stencilKey) return;
+      if (e.button !== 0 || e.altKey || painting || stencilKey || app.tool === 'select') return;
       if (e.target !== canvas) return;
       e.stopPropagation();
       e.preventDefault();
@@ -258,6 +339,8 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
       else if (key === 'e') exportDialog(app);
       else if (key === 'o') void openMeshDialog(app);
       else if (key === 'g') app.addGroup(true);
+      else if (key === 'a' && app.tool === 'select') app.selectAllFaces(!e.shiftKey);
+      else if (key === 'i' && app.tool === 'select') app.invertFaces();
       else return;
       e.preventDefault();
       return;
@@ -285,6 +368,20 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
             break;
           case 'e':
             app.setTool('erase');
+            break;
+          case 'p':
+            app.setTool('select');
+            break;
+          case 'escape':
+            if (app.tool !== 'select') return;
+            app.selectAllFaces(false);
+            break;
+          case '1':
+          case '2':
+          case '3':
+          case '4':
+            if (app.tool !== 'select') return;
+            app.setFaceMode(FACE_MODES[+key - 1][0]);
             break;
           case 's':
             if (!e.repeat && stencilReady()) {

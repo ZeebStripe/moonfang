@@ -16,6 +16,7 @@ export const ICONS = {
   down: svg('<path d="M12 5v14M6 13l6 6 6-6"/>'),
   undo: svg('<path d="M9 14L4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 0 10h-3"/>'),
   redo: svg('<path d="M15 14l5-5-5-5"/><path d="M20 9H9a5 5 0 0 0 0 10h3"/>'),
+  polyFill: svg('<path d="M4 18L9 5l11 4-4 11z"/><path d="M9 5l7 15" stroke-opacity=".5"/><path d="M4 18l5-13 7 15z" fill="currentColor" fill-opacity=".35"/>'),
   frame: svg('<path d="M4 9V4h5M20 9V4h-5M4 15v5h5M20 15v5h-5"/>'),
   folder: svg('<path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/>'),
   close: svg('<path d="M6 6l12 12M18 6L6 18"/>'),

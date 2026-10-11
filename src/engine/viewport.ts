@@ -138,6 +138,31 @@ export class Viewport {
     this.frame();
   }
 
+  // Face selection (polygon fill tool): the selected faces tinted, the faces under the cursor highlighted.
+  private faceOverlays = {
+    sel: this.makeOverlay(0xff8a1f, 0.42),
+    hover: this.makeOverlay(0xffffff, 0.28),
+  };
+
+  private makeOverlay(color: number, opacity: number) {
+    const m = new THREE.Mesh(
+      new THREE.BufferGeometry(),
+      new THREE.MeshBasicMaterial({ color, transparent: true, opacity, side: THREE.DoubleSide, depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2, polygonOffsetUnits: -4 }),
+    );
+    m.frustumCulled = false;
+    m.renderOrder = 3;
+    return m;
+  }
+
+  /** Shows faces in the current view (3D or UV); the geometry is owned by the viewport from now on. */
+  setFaceOverlay(which: 'sel' | 'hover', geometry: THREE.BufferGeometry | null) {
+    const m = this.faceOverlays[which];
+    m.removeFromParent();
+    m.geometry.dispose();
+    m.geometry = geometry ?? new THREE.BufferGeometry();
+    if (geometry) (this.uvView ? this.uvScene : this.scene).add(m);
+  }
+
   setTextures(set: number, t: ViewportTextures) {
     this.textures[set] = t;
     const m = this.pbrs[set];

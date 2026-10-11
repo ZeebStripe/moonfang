@@ -1315,3 +1315,48 @@ body:has(.modal-backdrop) .toasts {
   align-items: stretch;
   gap: 4px;
 }
+
+/* ---------------------------------------------------------------- polygon fill (face selection) */
+#viewport-wrap.face-select canvas {
+  cursor: crosshair;
+}
+.face-box {
+  position: absolute;
+  display: none;
+  z-index: 4;
+  pointer-events: none;
+  border: 1px dashed #ffb061;
+  background: rgba(255, 138, 31, 0.12);
+}
+.face-box.remove {
+  border-color: #9fb4ff;
+  background: rgba(120, 150, 255, 0.12);
+}
+.seg.face-modes {
+  display: flex;
+  margin: 0 0 8px;
+}
+.seg.face-modes .seg-btn {
+  flex: 1;
+  padding: 4px 2px;
+  font-size: 11.5px;
+}
+.face-sel {
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+.face-count {
+  font-size: 11.5px;
+  color: var(--text-dim);
+}
+.face-head {
+  margin: 12px 0 6px;
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--text-dim);
+}

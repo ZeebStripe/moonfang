@@ -5,6 +5,7 @@ import { displaySettings, saveMaterialDialog } from './actions';
 import { checkbox, colorField, h, iconButton, section, selectField, slider } from './dom';
 import { ICONS } from './icons';
 import { brushTipControls, stencilControls } from './brushUI';
+import { FACE_MODES } from '../engine/faceSelect';
 
 const CHANNEL_LABELS: Record<ChannelKey, string> = {
   color: 'Base Color',
@@ -132,6 +133,63 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
         : h('div', { class: 'dim small' }, 'Erases the enabled channels of the paint layer.'),
       app.tool === 'erase' ? channelToggles(b.channels) : null,
       ...common,
+    );
+  }
+
+  /** Polygon fill tool: selection mode, selection commands and what to do with the selected faces. */
+  let syncFaces = () => {};
+  function faceSection(): HTMLElement {
+    const b = app.brush;
+    const l = app.selected;
+    const modes = FACE_MODES.map(([id, label, title], i) =>
+      h('button', { class: 'seg-btn', title: `${title} (${i + 1})`, onclick: () => app.setFaceMode(id) }, label),
+    );
+    const count = h('span', { class: 'face-count' });
+    syncFaces = () => {
+      modes.forEach((m, i) => m.classList.toggle('active', app.faces.mode === FACE_MODES[i][0]));
+      const n = app.selectedFaceCount;
+      const [lo, hi] = app.faceRange;
+      count.textContent = app.mesh ? `${n.toLocaleString()} of ${(hi - lo).toLocaleString()} triangles selected` : 'No mesh';
+    };
+    syncFaces();
+    const btn = (label: string, title: string, fn: () => void, cls = 'btn small') => h('button', { class: cls, title, onclick: fn }, label);
+    const layerActions = !l
+      ? [h('div', { class: 'dim small' }, 'Select a layer to show or hide it on these faces.')]
+      : [
+          h('div', { class: 'small' }, h('span', { class: 'dim' }, 'Selected layer: '), l.name),
+          h(
+            'div',
+            { class: 'row wrap' },
+            btn('Show here', `Mask "${l.name}" so it shows on the selected faces (adds a mask if it has none)`, () => app.maskFaces(true)),
+            btn('Hide here', `Mask "${l.name}" out of the selected faces`, () => app.maskFaces(false)),
+            ...(l.kind === 'paint'
+              ? [
+                  btn('Fill with brush', `Paint the brush material onto the selected faces of "${l.name}"`, () => app.paintFaces(false)),
+                  btn('Erase', `Erase the brush's channels from the selected faces of "${l.name}"`, () => app.paintFaces(true)),
+                ]
+              : []),
+          ),
+        ];
+    return section(
+      'Polygon Fill',
+      h('div', { class: 'seg face-modes' }, ...modes),
+      h(
+        'div',
+        { class: 'row face-sel' },
+        count,
+        h('div', { class: 'spacer' }),
+        btn('All', 'Select every face of this texture set (Ctrl+A)', () => app.selectAllFaces(true)),
+        btn('None', 'Clear the selection (Esc)', () => app.selectAllFaces(false)),
+        btn('Invert', 'Invert the selection (Ctrl+I)', () => app.invertFaces()),
+      ),
+      h('div', { class: 'dim small' }, 'Click or drag over faces to select them, Ctrl to deselect, Shift+drag to box-select the visible faces.'),
+      h('div', { class: 'face-head' }, 'Assign a material'),
+      h('div', { class: 'brush-material' }, h('span', { class: 'dim' }, 'Brush material: '), b.materialName),
+      channelEditor(b.values, b.channels, () => (b.materialName = 'Custom'), b.maps, app.textures),
+      btn('Assign to selected faces', 'New fill layer with the brush material, masked to the selected faces', () => app.assignMaterialToFaces(), 'btn primary'),
+      h('div', { class: 'dim small' }, 'Or click a material or smart material in the shelf to assign it.'),
+      h('div', { class: 'face-head' }, 'Selected layer'),
+      ...layerActions,
     );
   }
 
@@ -354,12 +412,13 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
       return;
     }
     const l = app.selected;
-    body.replaceChildren(brushSection(), ...(l ? [layerSection(l), maskSection(l)] : [h('div', { class: 'empty' }, 'No layer selected.')]));
+    body.replaceChildren(app.tool === 'select' ? faceSection() : brushSection(), ...(l ? [layerSection(l), maskSection(l)] : [h('div', { class: 'empty' }, 'No layer selected.')]));
     body.scrollTop = scroll;
   }
 
   app.on((k) => {
     if (k === 'selection' || k === 'brush' || k === 'mesh' || k === 'settings' || k === 'tool') render();
+    else if (k === 'faces' || k === 'set') syncFaces();
   });
   render();
 }

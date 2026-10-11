@@ -449,6 +449,27 @@ export class Painter {
     return true;
   }
 
+  /** Polygon fill: applies the brush (or eraser) to the given triangles (UV-space geometry) in one undoable step. */
+  fillFaces(layer: Layer, part: PaintPart, brush: BrushSettings, erase: boolean, faces: THREE.BufferGeometry): PixelEntry | null {
+    if (!this.strokeRT || this.active) return null;
+    if (part === 'content' && layer.kind !== 'paint') return null;
+    if (part === 'mask' && !layer.mask) return null;
+    this.begin(layer, part, brush, erase, 0);
+    this.drawFaces(this.strokeRT, faces, 1);
+    this.applyPaintMat.uniforms.uStencilOn.value = 0;
+    this.applyStroke();
+    return this.endStroke();
+  }
+
+  /** Writes `value` into the target's texels covered by the triangles (rendered at their UVs). */
+  drawFaces(target: THREE.WebGLRenderTarget, faces: THREE.BufferGeometry, value: number) {
+    this.solidMat.uniforms.uValue.value = value;
+    new MeshPass(faces).render(this.renderer, this.solidMat, target);
+    this.renderer.setRenderTarget(null);
+  }
+
+  private solidMat = rawMaterial(`layout(location = 0) out vec4 o0; uniform float uValue; void main() { o0 = vec4(vec3(uValue), 1.0); }`, { uValue: { value: 1 } }, { vertex: UV_SPACE_VERT });
+
   /** Applies the brush (or eraser) to the whole layer/mask in one undoable step, without projection. */
   fill(layer: Layer, part: PaintPart, brush: BrushSettings, erase: boolean): PixelEntry | null {
     if (!this.strokeRT || this.active) return null;

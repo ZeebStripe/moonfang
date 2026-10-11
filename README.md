@@ -28,6 +28,11 @@ It runs as a desktop app or in the browser (WebGL2) and is built with TypeScript
   - blend modes (normal, multiply, screen, overlay, add, subtract) plus separate height blending
   - visibility, drag-and-drop reordering and duplication
   - folders that can be nested, collapsed, and given their own mask or opacity; drag layers into or out of them, and Ctrl+G wraps the selected layer in a new folder. Smart materials arrive as a folder.
+- **Polygon fill** (`P`): select faces and assign materials to them. Click or drag over the model to select whole
+  **polygons** (quads), single **triangles**, **UV islands** or connected **mesh parts**. Shift+drag box-selects the visible
+  faces, and Ctrl deselects. Then click a material or smart material in the shelf: it is added as a fill layer (or folder)
+  masked to exactly those faces. You can also show or hide the selected layer on them, or fill them with the brush.
+  It works in the 2D UV view too.
 - **Masks**: painted masks (black/white/grey) that multiply with procedural **generators**:
   - Edge Wear, Dirt/Cavity, Top-Facing (dust), Position Gradient, Noise, Ambient Occlusion, Curvature
   - each generator has amount, contrast, noise breakup, scale, invert and seed controls
@@ -149,7 +154,8 @@ npm run build
 
 1. Load a mesh. The mesh maps bake automatically.
 2. Pick a material in the shelf to paint it with the brush, or press **+** on a material to add it as a fill layer.
-3. To paint a material on: add a fill layer, give it a **black mask** (from the mask button on the layer stack), then paint the mask white.
+3. To put a material on specific parts: press **P** (polygon fill), select the faces, and click the material in the shelf.
+   To paint it on freely instead: add a fill layer, give it a **black mask** (from the mask button on the layer stack), then paint the mask white.
 4. To add wear and grime: click a **Smart Material**, or apply a **Smart Mask** to a layer and tweak the generator in the Properties panel.
 5. Export with **Export** in the top right.
 
@@ -161,7 +167,11 @@ npm run build
 | Alt + Left mouse / Middle mouse | Orbit |
 | Right mouse / Shift + Middle mouse | Pan |
 | Wheel | Zoom |
-| `B` / `E` | Paint / Erase |
+| `B` / `E` / `P` | Paint / Erase / Polygon fill |
+| Polygon fill: Left mouse | Select faces (drag to select more; Ctrl deselects) |
+| Polygon fill: Shift + drag | Box-select the visible faces |
+| Polygon fill: `1` `2` `3` `4` | Select triangles / polygons / UV islands / mesh parts |
+| Polygon fill: Ctrl+A / Ctrl+I / Esc | Select all / Invert / Clear the selection |
 | Ctrl + Right mouse drag | Brush size (left/right) or hardness (up/down) |
 | `[` `]` | Brush size (with Shift: hardness) |
 | `X` | Swap the mask paint value (black/white) |
@@ -184,6 +194,9 @@ All painting and compositing runs on the GPU in **texture space**.
   then rasterises the mesh *in UV space*. Each texel projects its world position into the screen, tests it against the
   depth map, and accumulates brush falloff into a stroke mask using MAX blending. An apply pass re-derives the layer from
   a pre-stroke snapshot, so stroke opacity never builds up, and that snapshot doubles as the undo entry.
+- **Polygon fill** (`src/engine/faceSelect.ts`): The visible triangles' ids are rendered into an offscreen buffer and read
+  back once per view, so hovering and box selection are lookups. Selected faces are rasterised in UV space into the mask
+  (or into the stroke mask, for brush fills), so the fill follows the face borders exactly.
 - **Layers** (`src/engine/compositor.ts`): Paint layers store per-channel value + coverage in five RGBA8 targets. Fill
   layers are uniforms plus fbm variation. Each layer is composited with ping-pong MRT passes, with masks and generators
   evaluated in the same shader. A final pass converts sRGB to linear, packs AO/roughness/metallic/height, derives a

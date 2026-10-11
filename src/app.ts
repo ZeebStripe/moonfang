@@ -26,13 +26,15 @@ import type { LayerMask } from './engine/layers';
 import { collectProjectFiles, projectSets, readProject, restoreLayers } from './engine/project';
 import { zipSync } from 'fflate';
 import { Viewport } from './engine/viewport';
+import { FacePicker, FaceSelection, subsetGeometry, type FaceMode, type TriRange } from './engine/faceSelect';
 import { disposeMeshEdges, loadMeshSource } from './engine/meshLoader';
 import { MATERIALS, type MaterialPreset, type SmartLayerSpec, type SmartMaterial } from './data/materials';
 import { importTextureSet, Library, makeAsset, mapTextureIds, TextureStore } from './engine/library';
 import { builtinTipTexture, importTipImage } from './engine/brushTips';
 
-export type Tool = 'paint' | 'erase';
-export type ChangeKind = 'layers' | 'selection' | 'brush' | 'mesh' | 'view' | 'history' | 'settings' | 'tool' | 'autosave' | 'stencil' | 'set' | 'gpu';
+/** 'select' = polygon fill: select faces, then fill them or assign materials to them */
+export type Tool = 'paint' | 'erase' | 'select';
+export type ChangeKind = 'layers' | 'selection' | 'brush' | 'mesh' | 'view' | 'history' | 'settings' | 'tool' | 'autosave' | 'stencil' | 'set' | 'gpu' | 'faces';
 
 /** One material of the mesh with its own layer stack, resolution, baked maps and composited textures. */
 export interface TextureSet {
@@ -186,6 +188,7 @@ export class App {
       committed: captureTree([], null),
     };
     this.painter = new Painter(this.renderer, this.fs, this.copier);
+    this.picker = new FacePicker(this.renderer);
     this.textures.onLoad(() => this.invalidate(true));
     // Library contents (e.g. imported brush tips) appear in the brush panel.
     this.library.onChange(() => this.emit('brush'));
@@ -271,6 +274,7 @@ export class App {
     this.painter.setContext(s.maps, this.textures);
     this.painter.setTextureSize(s.texSize);
     if (this.viewport.mode === 'mask') s.dirty = true;
+    this.refreshFaceOverlay();
     this.emit('set');
     this.emit('layers');
     this.emit('selection');
@@ -362,6 +366,7 @@ export class App {
     const oldFlat = this.flatGeometry;
     this.mesh = mesh;
     this.flatGeometry = flattenToUV(mesh.geometry);
+    this.faces.reset(mesh.topology, mesh.geometry.attributes.uv as THREE.BufferAttribute);
     this.viewport.setGeometry(mesh.geometry, mesh.sets.length);
     this.painter.setMesh(mesh.geometry);
     this.clearHistory();
@@ -509,6 +514,7 @@ export class App {
     this.uvView = on;
     this.viewport.setUVView(on);
     this.bindPainterGeometry();
+    this.refreshFaceOverlay();
     this.emit('view');
   }
 
@@ -545,7 +551,172 @@ export class App {
 
   setTool(t: Tool) {
     this.tool = t;
+    this.refreshFaceOverlay();
     this.emit('tool');
+  }
+
+  // ---------------------------------------------------------------- face selection (polygon fill)
+  faces = new FaceSelection();
+  private picker: FacePicker;
+
+  /** The active texture set's triangles. */
+  get faceRange(): TriRange {
+    const i = this.set.info;
+    return [i.start / 3, (i.start + i.count) / 3];
+  }
+
+  private syncPicker(): boolean {
+    if (!this.ready || !this.mesh || !this.flatGeometry) return false;
+    this.picker.update(this.uvView ? this.flatGeometry : this.mesh.geometry, this.viewport.activeCamera, this.faceRange);
+    return true;
+  }
+
+  /** The active set's triangle visible at a drawing-buffer pixel (origin bottom-left), or -1. */
+  pickFace(x: number, y: number): number {
+    return this.syncPicker() ? this.picker.at(x, y) : -1;
+  }
+
+  /** The active set's triangles visible inside a drawing-buffer rectangle, grown by the selection mode. */
+  facesInRect(x0: number, y0: number, x1: number, y1: number): number[] {
+    return this.syncPicker() ? this.faces.expand(this.picker.inRect(x0, y0, x1, y1), this.faceRange) : [];
+  }
+
+  /** Grows picked triangles into polygons / UV islands / mesh parts (the selection mode). */
+  expandFaces(tris: number[]): number[] {
+    return this.faces.expand(tris, this.faceRange);
+  }
+
+  selectFaces(tris: number[], op: 'add' | 'remove') {
+    if (!tris.length) return;
+    this.faces.apply(tris, op);
+    this.facesChanged();
+  }
+
+  selectAllFaces(on: boolean) {
+    if (!this.mesh) return;
+    this.faces.setAll(this.faceRange, on ? 1 : 0);
+    this.facesChanged();
+  }
+
+  invertFaces() {
+    if (!this.mesh) return;
+    this.faces.invert(this.faceRange);
+    this.facesChanged();
+  }
+
+  setFaceMode(mode: FaceMode) {
+    this.faces.mode = mode;
+    this.emit('faces');
+  }
+
+  get selectedFaceCount(): number {
+    return this.mesh ? this.faces.count(this.faceRange) : 0;
+  }
+
+  private facesChanged() {
+    this.refreshFaceOverlay();
+    this.emit('faces');
+  }
+
+  private overlayGeometry(tris: number[]): THREE.BufferGeometry {
+    return subsetGeometry(this.uvView ? this.flatGeometry! : this.mesh!.geometry, tris, ['position']);
+  }
+
+  /** The selection is shown while the polygon fill tool is active (in the 3D or UV view, whichever is open). */
+  refreshFaceOverlay() {
+    const tris = this.tool === 'select' && this.mesh ? this.faces.list(this.faceRange) : [];
+    this.viewport.setFaceOverlay('sel', tris.length ? this.overlayGeometry(tris) : null);
+    this.hoverFaces(null);
+  }
+
+  /** Highlights the faces a click would select. */
+  hoverFaces(tris: number[] | null) {
+    this.viewport.setFaceOverlay('hover', tris?.length && this.tool === 'select' && this.mesh ? this.overlayGeometry(tris) : null);
+  }
+
+  /** The selected faces of the active set as UV-space geometry (null, with a hint, when there are none). */
+  private selectedFaceGeometry(): THREE.BufferGeometry | null {
+    if (!this.ready || !this.mesh || this.painter.isPainting) return null;
+    const tris = this.faces.list(this.faceRange);
+    if (!tris.length) {
+      this.toast('Select some faces first: Polygon Fill tool (P), then click or Shift+drag on the model.', 'warn');
+      return null;
+    }
+    return subsetGeometry(this.mesh.geometry, tris);
+  }
+
+  /** A mask that shows its layer on the given faces only. */
+  private faceMask(faces: THREE.BufferGeometry): LayerMask {
+    const rt = createMaskRT(this.renderer, this.texSize, 0);
+    this.painter.drawFaces(rt, faces, 1);
+    return { rt, enabled: true, generator: null };
+  }
+
+  /** Assigns a material to the selected faces: a new fill layer masked to them (the brush material by default). */
+  assignMaterialToFaces(preset?: MaterialPreset) {
+    const g = this.selectedFaceGeometry();
+    if (!g) return;
+    const mask = this.faceMask(g);
+    g.dispose();
+    if (preset) return this.addFillLayer(preset, mask);
+    const b = this.brush;
+    const l = createFillLayer(b.materialName === 'Custom' ? this.nextName('Fill') : b.materialName, b.values, b.channels);
+    if (b.maps) {
+      l.maps = cloneMaps(b.maps);
+      l.tiling = b.tiling;
+    }
+    l.mask = mask;
+    this.insertAboveSelected('Assign material to faces', l);
+  }
+
+  /** Assigns a smart material to the selected faces: its folder is masked to them. */
+  assignSmartMaterialToFaces(sm: SmartMaterial) {
+    const g = this.selectedFaceGeometry();
+    if (!g) return;
+    const mask = this.faceMask(g);
+    g.dispose();
+    this.addSmartMaterial(sm, mask);
+  }
+
+  /** Shows (reveal) or hides the selected layer on the selected faces through its mask; adds a mask if needed. */
+  maskFaces(reveal: boolean) {
+    const l = this.selected;
+    if (!l) return this.toast('Select a layer first.', 'warn');
+    const g = this.selectedFaceGeometry();
+    if (!g) return;
+    if (!l.mask) {
+      // A new mask starts as the opposite, so the selected faces are the only ones that differ.
+      const rt = createMaskRT(this.renderer, this.texSize, reveal ? 0 : 1);
+      this.painter.drawFaces(rt, g, reveal ? 1 : 0);
+      l.mask = { rt, enabled: true, generator: null };
+      this.invalidate();
+      this.commitLayers(reveal ? 'Mask to selected faces' : 'Hide on selected faces');
+      this.emit('layers');
+      this.emit('selection');
+    } else {
+      const entry = this.painter.fillFaces(l, 'mask', { ...this.brush, opacity: 1, maskValue: 1 }, !reveal, g);
+      if (entry) {
+        this.invalidate();
+        this.pushHistory({ kind: 'pixels', label: reveal ? 'Show on selected faces' : 'Hide on selected faces', entry });
+        this.emit('layers');
+      }
+    }
+    g.dispose();
+  }
+
+  /** Fills (or erases) the selected faces of the selected paint layer with the brush. */
+  paintFaces(erase = false) {
+    const l = this.selected;
+    if (!l || l.kind !== 'paint') return this.toast('Select a paint layer to fill faces with the brush.', 'warn');
+    const g = this.selectedFaceGeometry();
+    if (!g) return;
+    const entry = this.painter.fillFaces(l, 'content', this.brush, erase, g);
+    g.dispose();
+    if (entry) {
+      this.invalidate();
+      this.pushHistory({ kind: 'pixels', label: erase ? 'Erase faces' : 'Fill faces', entry });
+      this.emit('layers');
+    }
   }
 
   // ---------------------------------------------------------------- layer operations
@@ -592,8 +763,9 @@ export class App {
     this.insertAboveSelected('Add folder', group);
   }
 
-  addFillLayer(preset?: MaterialPreset) {
+  addFillLayer(preset?: MaterialPreset, mask: LayerMask | null = null) {
     const l = createFillLayer(preset ? preset.name : this.nextName('Fill'), preset?.values ?? DEFAULT_VALUES);
+    l.mask = mask;
     if (preset?.variation) l.variation = preset.variation;
     if (preset?.maps) {
       l.maps = cloneMaps(preset.maps);
@@ -601,7 +773,7 @@ export class App {
       l.channels.height = !!preset.maps.height || preset.values.height !== 0.5;
       l.channels.normal = !!preset.maps.normal;
     }
-    this.insertAboveSelected('Add fill layer', l);
+    this.insertAboveSelected(mask ? 'Assign material to faces' : 'Add fill layer', l);
   }
 
   /** Built-in presets followed by the user's library. */
@@ -613,7 +785,7 @@ export class App {
     return id ? this.allMaterials.find((m) => m.id === id) : undefined;
   }
 
-  addSmartMaterial(sm: SmartMaterial) {
+  addSmartMaterial(sm: SmartMaterial, mask: LayerMask | null = null) {
     const created: Layer[] = sm.layers.map((spec) => {
       const preset = this.findMaterial(spec.material);
       const values: MaterialValues = { ...DEFAULT_VALUES, ...preset?.values, ...spec.values };
@@ -640,7 +812,9 @@ export class App {
     });
     this.renderer.setRenderTarget(null);
     // A smart material arrives as a folder.
-    this.insertAboveSelected('Add smart material', createGroup(sm.name, created));
+    const folder = createGroup(sm.name, created);
+    folder.mask = mask;
+    this.insertAboveSelected(mask ? 'Assign smart material to faces' : 'Add smart material', folder);
     this.toast(`Added smart material "${sm.name}" (${created.length} layers)`);
   }
 
