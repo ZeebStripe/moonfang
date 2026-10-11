@@ -110,8 +110,10 @@ export function mountToolbar(app: App, root: HTMLElement) {
   const sync = () => {
     paint.classList.toggle('active', app.tool === 'paint');
     erase.classList.toggle('active', app.tool === 'erase');
-    undo.disabled = !app.painter.canUndo;
-    redo.disabled = !app.painter.canRedo;
+    undo.disabled = !app.canUndo;
+    redo.disabled = !app.canRedo;
+    undo.title = app.undoLabel ? `Undo ${app.undoLabel} (Ctrl+Z)` : 'Undo (Ctrl+Z)';
+    redo.title = app.redoLabel ? `Redo ${app.redoLabel} (Ctrl+Shift+Z)` : 'Redo (Ctrl+Shift+Z)';
   };
   app.on(sync);
   sync();

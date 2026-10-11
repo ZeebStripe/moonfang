@@ -114,7 +114,11 @@ export function mountLayersPanel(app: App, root: HTMLElement) {
       e.stopPropagation();
       const input = h('input', { type: 'text', class: 'rename', value: l.name }) as HTMLInputElement;
       const done = (commit: boolean) => {
-        if (commit && input.value.trim()) l.name = input.value.trim();
+        if (commit && input.value.trim() && input.value.trim() !== l.name) {
+          l.name = input.value.trim();
+          app.layerChanged();
+          app.commitLayers('Rename layer');
+        }
         render();
       };
       input.addEventListener('keydown', (ev) => {

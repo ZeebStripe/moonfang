@@ -20,7 +20,9 @@ import {
 import type { PaintMesh, TextureSetInfo } from './engine/meshLoader';
 import { DEFAULT_BAKE, MeshMaps, type BakeSettings } from './engine/meshMaps';
 import { HighPoly } from './engine/highPoly';
-import { DEFAULT_STENCIL, Painter, type BrushSettings, type PaintPart, type Stamp } from './engine/painter';
+import { DEFAULT_STENCIL, Painter, swapPixels, type BrushSettings, type PaintPart, type Stamp } from './engine/painter';
+import { captureTree, liveRefs, restoreTree, treeRefs, type HistoryEntry, type TreeState } from './engine/history';
+import type { LayerMask } from './engine/layers';
 import { collectProjectFiles, projectSets, readProject, restoreLayers } from './engine/project';
 import { zipSync } from 'fflate';
 import { Viewport } from './engine/viewport';
@@ -44,7 +46,13 @@ export interface TextureSet {
   maps: MeshMaps;
   compositor: Compositor;
   dirty: boolean;
+  /** layer tree as of the last undo step (the "before" of the next one) */
+  committed: TreeState;
 }
+
+/** History limits: total steps, and steps holding full layer textures (strokes/fills). */
+const HISTORY_LIMIT = 80;
+const PIXEL_HISTORY_LIMIT = 24;
 
 const DEFAULT_BRUSH_EXTRAS = {
   symmetry: 'off' as const,
@@ -137,6 +145,7 @@ export class App {
       maps: new MeshMaps(this.renderer, this.fs),
       compositor: new Compositor(this.renderer, this.fs),
       dirty: false,
+      committed: captureTree([], null),
     };
     this.painter = new Painter(this.renderer, this.fs, this.copier);
     this.textures.onLoad(() => this.invalidate(true));
@@ -215,6 +224,7 @@ export class App {
   /** Switch which texture set is painted and shown in the layer stack. */
   activateSet(i: number) {
     if (!this.sets[i] || this.painter.isPainting) return;
+    this.flushCommit();
     this.activeSet = i;
     const s = this.set;
     this.painter.setUVGeometry(s.geometry);
@@ -235,7 +245,18 @@ export class App {
     geometry.setDrawRange(info.start, info.count);
     const compositor = new Compositor(this.renderer, this.fs);
     compositor.resize(size);
-    return { info, geometry, texSize: size, layers: [], selectedId: null, part: 'content', maps: new MeshMaps(this.renderer, this.fs), compositor, dirty: true };
+    return {
+      info,
+      geometry,
+      texSize: size,
+      layers: [],
+      selectedId: null,
+      part: 'content',
+      maps: new MeshMaps(this.renderer, this.fs),
+      compositor,
+      dirty: true,
+      committed: captureTree([], null),
+    };
   }
 
   private defaultLayers(s: TextureSet) {
@@ -294,7 +315,7 @@ export class App {
     this.mesh = mesh;
     this.viewport.setGeometry(mesh.geometry, mesh.sets.length);
     this.painter.setMesh(mesh.geometry);
-    this.painter.clearHistory();
+    this.clearHistory();
     this.sets = mesh.sets.map((info, i) => this.createSet(info, sizes?.[i] ?? old[i]?.texSize ?? 2048));
     for (const [i, s] of old.entries()) {
       if (keep) {
@@ -308,6 +329,7 @@ export class App {
     this.activateSet(0);
     await this.rebake();
     if (layers === 'reset' || (layers === 'keep' && !keep)) this.sets.forEach((s) => this.defaultLayers(s));
+    this.rebaseline();
     for (const w of mesh.warnings) this.toast(w, 'warn');
     this.emit('mesh');
     this.emit('set');
@@ -384,8 +406,8 @@ export class App {
     s.texSize = size;
     s.compositor.resize(size);
     this.painter.setTextureSize(size);
-    // Undo snapshots of this set have the old size.
-    this.painter.clearHistory();
+    // Stroke snapshots of this set have the old size.
+    this.clearHistory();
     await this.rebake([s]);
     this.emit('settings');
     this.emit('history');
@@ -421,13 +443,14 @@ export class App {
 
   // ---------------------------------------------------------------- layer operations
   /** Inserts above the selected layer, in the same folder as it. */
-  private insertAboveSelected(...ls: Layer[]) {
+  private insertAboveSelected(label: string, ...ls: Layer[]) {
     const loc = this.selectedId === null ? null : locateLayer(this.layers, this.selectedId);
     if (loc) loc.list.splice(loc.index + 1, 0, ...ls);
     else this.layers.push(...ls);
     this.selectedId = ls[ls.length - 1].id;
     this.part = 'content';
     this.invalidate();
+    this.commitLayers(label);
     this.emit('layers');
     this.emit('selection');
   }
@@ -440,7 +463,7 @@ export class App {
   }
 
   addPaintLayer() {
-    this.insertAboveSelected(createPaintLayer(this.renderer, this.texSize, this.nextName('Layer')));
+    this.insertAboveSelected('Add paint layer', createPaintLayer(this.renderer, this.texSize, this.nextName('Layer')));
   }
 
   /** New folder above the selection; with `wrapSelected` the selected layer is moved into it. */
@@ -454,11 +477,12 @@ export class App {
       this.selectedId = group.id;
       this.part = 'content';
       this.invalidate();
+      this.commitLayers('Group layer');
       this.emit('layers');
       this.emit('selection');
       return;
     }
-    this.insertAboveSelected(group);
+    this.insertAboveSelected('Add folder', group);
   }
 
   addFillLayer(preset?: MaterialPreset) {
@@ -470,7 +494,7 @@ export class App {
       l.channels.height = !!preset.maps.height || preset.values.height !== 0.5;
       l.channels.normal = !!preset.maps.normal;
     }
-    this.insertAboveSelected(l);
+    this.insertAboveSelected('Add fill layer', l);
   }
 
   /** Built-in presets followed by the user's library. */
@@ -509,25 +533,24 @@ export class App {
     });
     this.renderer.setRenderTarget(null);
     // A smart material arrives as a folder.
-    this.insertAboveSelected(createGroup(sm.name, created));
+    this.insertAboveSelected('Add smart material', createGroup(sm.name, created));
     this.toast(`Added smart material "${sm.name}" (${created.length} layers)`);
   }
 
   deleteLayer(id: number) {
     const loc = locateLayer(this.layers, id);
     if (!loc) return;
+    // Not disposed here: the undo history still refers to it (see dropEntries).
     loc.list.splice(loc.index, 1);
-    for (const l of walkLayers([loc.layer])) this.painter.forgetLayer(l);
-    disposeLayer(loc.layer);
     if (this.selectedId !== null && !this.findLayer(this.selectedId)) {
       const next = loc.list[Math.min(loc.index, loc.list.length - 1)] ?? loc.parent ?? this.layers[this.layers.length - 1];
       this.selectedId = next?.id ?? null;
       this.part = 'content';
     }
     this.invalidate();
+    this.commitLayers('Delete layer');
     this.emit('layers');
     this.emit('selection');
-    this.emit('history');
   }
 
   duplicateLayer(id: number) {
@@ -536,7 +559,7 @@ export class App {
     const copy = this.cloneLayer(src);
     copy.name = `${src.name} copy`;
     this.renderer.setRenderTarget(null);
-    this.insertAboveSelected(copy);
+    this.insertAboveSelected('Duplicate layer', copy);
   }
 
   /** Deep copy including GPU textures and folder contents. */
@@ -573,6 +596,7 @@ export class App {
     loc.list.splice(loc.index, 1);
     loc.list.splice(to, 0, loc.layer);
     this.invalidate();
+    this.commitLayers('Move layer');
     this.emit('layers');
   }
 
@@ -597,6 +621,7 @@ export class App {
       target.list.splice(where === 'above' ? target.index + 1 : target.index, 0, loc.layer);
     }
     this.invalidate();
+    this.commitLayers('Move layer');
     this.emit('layers');
   }
 
@@ -611,6 +636,7 @@ export class App {
     this.selectedId = id;
     this.part = generator ? 'content' : 'mask';
     this.invalidate();
+    this.commitLayers(generator ? 'Add generator' : 'Add mask');
     this.emit('layers');
     this.emit('selection');
   }
@@ -618,19 +644,21 @@ export class App {
   removeMask(id: number) {
     const l = this.findLayer(id);
     if (!l?.mask) return;
-    this.painter.forgetLayer(l, 'mask');
-    l.mask.rt.dispose();
-    l.mask = null;
+    l.mask = null; // kept alive by the undo history
     this.part = 'content';
     this.invalidate();
+    this.commitLayers('Remove mask');
     this.emit('layers');
     this.emit('selection');
-    this.emit('history');
   }
 
-  /** Changes to layer properties that don't alter the stack structure. */
+  /**
+   * Changes to layer properties (sliders, toggles, renames…). Edits within a short pause are merged into one
+   * undo step, so dragging a slider is undone in one go.
+   */
   layerChanged(structural = false) {
     this.invalidate();
+    this.scheduleCommit();
     if (structural) this.emit('layers');
   }
 
@@ -795,9 +823,10 @@ export class App {
     const l = this.selected;
     if (!l || this.painter.isPainting) return;
     if (this.part === 'content' && l.kind !== 'paint') return;
-    if (this.painter.fill(l, this.part, this.brush, erase)) {
+    const entry = this.painter.fill(l, this.part, this.brush, erase);
+    if (entry) {
       this.invalidate();
-      this.emit('history');
+      this.pushHistory({ kind: 'pixels', label: erase ? 'Clear' : 'Fill', entry });
     }
   }
 
@@ -810,27 +839,152 @@ export class App {
       this.painter.addStamps(this.pendingStamps);
       this.pendingStamps = [];
     }
-    this.painter.endStroke();
+    const entry = this.painter.endStroke();
     this.invalidate();
+    if (entry) this.pushHistory({ kind: 'pixels', label: this.tool === 'erase' ? 'Erase' : 'Paint stroke', entry });
+  }
+
+  // ---------------------------------------------------------------- history
+  private undoStack: HistoryEntry<TextureSet>[] = [];
+  private redoStack: HistoryEntry<TextureSet>[] = [];
+  private commitTimer = 0;
+  private pendingCommitSet: TextureSet | null = null;
+
+  get canUndo() {
+    return this.undoStack.length > 0 || !!this.commitTimer;
+  }
+  get canRedo() {
+    return this.redoStack.length > 0;
+  }
+  get undoLabel(): string | null {
+    return this.commitTimer ? 'Edit layer' : (this.undoStack[this.undoStack.length - 1]?.label ?? null);
+  }
+  get redoLabel(): string | null {
+    return this.redoStack[this.redoStack.length - 1]?.label ?? null;
+  }
+
+  /** Records the set's layer-tree changes since the last step as one undo step (no-op if nothing changed). */
+  commitLayers(label = 'Edit layer', set: TextureSet = this.set) {
+    clearTimeout(this.commitTimer);
+    this.commitTimer = 0;
+    this.pendingCommitSet = null;
+    if (!this.sets.includes(set)) return;
+    const after = captureTree(set.layers, set.selectedId);
+    if (after.key === set.committed.key) return;
+    const before = set.committed;
+    set.committed = after;
+    this.pushHistory({ kind: 'tree', label, owner: set, before, after });
+  }
+
+  private scheduleCommit() {
+    if (this.pendingCommitSet && this.pendingCommitSet !== this.set) this.flushCommit();
+    clearTimeout(this.commitTimer);
+    const set = (this.pendingCommitSet = this.set);
+    this.commitTimer = window.setTimeout(() => this.commitLayers('Edit layer', set), 600);
     this.emit('history');
+  }
+
+  private flushCommit() {
+    if (this.commitTimer && this.pendingCommitSet) this.commitLayers('Edit layer', this.pendingCommitSet);
+  }
+
+  private pushHistory(e: HistoryEntry<TextureSet>) {
+    if (e.kind === 'pixels') this.flushCommit();
+    this.undoStack.push(e);
+    const dropped = this.redoStack;
+    this.redoStack = [];
+    let pixels = this.undoStack.filter((x) => x.kind === 'pixels').length;
+    while (this.undoStack.length > HISTORY_LIMIT || pixels > PIXEL_HISTORY_LIMIT) {
+      const d = this.undoStack.shift()!;
+      if (d.kind === 'pixels') pixels--;
+      dropped.push(d);
+    }
+    this.dropEntries(dropped);
+    this.emit('history');
+  }
+
+  /** Frees what only the dropped entries kept alive: stroke snapshots, and deleted layers / removed masks. */
+  private dropEntries(dropped: HistoryEntry<TextureSet>[]) {
+    if (!dropped.length) return;
+    const candLayers = new Set<Layer>();
+    const candMasks = new Set<LayerMask>();
+    for (const d of dropped) {
+      if (d.kind === 'pixels') d.entry.rt.dispose();
+      else {
+        treeRefs(d.before, candLayers, candMasks);
+        treeRefs(d.after, candLayers, candMasks);
+      }
+    }
+    const liveLayers = new Set<Layer>();
+    const liveMasks = new Set<LayerMask>();
+    for (const s of this.sets) {
+      liveRefs(s.layers, liveLayers, liveMasks);
+      treeRefs(s.committed, liveLayers, liveMasks);
+    }
+    for (const e of [...this.undoStack, ...this.redoStack]) {
+      if (e.kind === 'pixels') liveLayers.add(e.entry.layer);
+      else {
+        treeRefs(e.before, liveLayers, liveMasks);
+        treeRefs(e.after, liveLayers, liveMasks);
+      }
+    }
+    for (const l of candLayers) if (!liveLayers.has(l) && l.kind === 'paint') l.rt.dispose();
+    for (const m of candMasks) if (!liveMasks.has(m)) m.rt.dispose();
+  }
+
+  clearHistory() {
+    clearTimeout(this.commitTimer);
+    this.commitTimer = 0;
+    this.pendingCommitSet = null;
+    const dropped = [...this.undoStack, ...this.redoStack];
+    this.undoStack = [];
+    this.redoStack = [];
+    this.dropEntries(dropped);
+    this.emit('history');
+  }
+
+  /** Makes every set's current layer tree the starting point for undo. */
+  private rebaseline() {
+    for (const s of this.sets) s.committed = captureTree(s.layers, s.selectedId);
   }
 
   undo() {
     if (this.painter.isPainting) return;
-    const l = this.painter.undo();
-    if (l) {
-      this.invalidate(true);
-      this.emit('history');
-    }
+    this.flushCommit();
+    const e = this.undoStack.pop();
+    if (!e) return;
+    this.applyEntry(e, 'undo');
+    this.redoStack.push(e);
+    this.emit('history');
   }
 
   redo() {
     if (this.painter.isPainting) return;
-    const l = this.painter.redo();
-    if (l) {
-      this.invalidate(true);
-      this.emit('history');
+    this.flushCommit();
+    const e = this.redoStack.pop();
+    if (!e) return;
+    this.applyEntry(e, 'redo');
+    this.undoStack.push(e);
+    this.emit('history');
+  }
+
+  private applyEntry(e: HistoryEntry<TextureSet>, dir: 'undo' | 'redo') {
+    if (e.kind === 'pixels') swapPixels(e.entry);
+    else {
+      const st = dir === 'undo' ? e.before : e.after;
+      const set = e.owner;
+      set.layers = restoreTree(st);
+      set.committed = st;
+      set.selectedId = st.selectedId;
+      const sel = set.selectedId === null ? null : locateLayer(set.layers, set.selectedId)?.layer;
+      if (!sel) set.selectedId = set.layers[set.layers.length - 1]?.id ?? null;
+      if (set.part === 'mask' && !sel?.mask) set.part = 'content';
+      const i = this.sets.indexOf(set);
+      if (i >= 0 && i !== this.activeSet) this.activateSet(i);
+      this.emit('layers');
+      this.emit('selection');
     }
+    this.invalidate(true);
   }
 
   // ---------------------------------------------------------------- project IO
@@ -888,6 +1042,7 @@ export class App {
       s.selectedId = s.layers[s.layers.length - 1]?.id ?? null;
       s.part = 'content';
     });
+    this.rebaseline();
     this.invalidate(true);
     this.emit('layers');
     this.emit('selection');

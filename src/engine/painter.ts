@@ -74,10 +74,25 @@ export interface Stamp {
 
 export type PaintPart = 'content' | 'mask';
 
-interface UndoEntry {
+/** Undo record of one stroke/fill: the layer's texture from before (swapped back and forth on undo/redo). */
+export interface PixelEntry {
   layer: Layer;
   part: PaintPart;
   rt: THREE.WebGLRenderTarget;
+}
+
+/** Swaps the entry's texture with the layer's current one (undo and redo are the same operation). */
+export function swapPixels(e: PixelEntry): boolean {
+  const l = e.layer;
+  if (e.part === 'content' && l.kind === 'paint') {
+    [l.rt, e.rt] = [e.rt, l.rt];
+    return true;
+  }
+  if (e.part === 'mask' && l.mask) {
+    [l.mask.rt, e.rt] = [e.rt, l.mask.rt];
+    return true;
+  }
+  return false;
 }
 
 const MAX_STAMPS = 64;
@@ -129,7 +144,6 @@ function setStencilUniforms(u: Record<string, THREE.IUniform>, st: StencilSettin
   u.uScreen.value.copy(buf);
   u.uDpr.value = tex.dpr;
 }
-const UNDO_LIMIT = 24;
 
 const STAMP_FRAG = /* glsl */ `
 in vec3 vPos;
@@ -273,8 +287,6 @@ export class Painter {
   private depthRT: THREE.WebGLRenderTarget | null = null;
   private strokeRT: THREE.WebGLRenderTarget | null = null;
   private snapshot: THREE.WebGLRenderTarget | null = null;
-  private undoStack: UndoEntry[] = [];
-  private redoStack: UndoEntry[] = [];
   private size = 0;
   private active: { layer: Layer; part: PaintPart; erase: boolean; brush: BrushSettings } | null = null;
   private pass: MeshPass | null = null;
@@ -377,7 +389,7 @@ export class Painter {
     this.pass = new MeshPass(geometry);
   }
 
-  /** Resizes the stroke buffer (history is kept: entries swap whole layer textures of their own size). */
+  /** Resizes the stroke buffer. */
   setTextureSize(size: number) {
     if (size === this.size) return;
     this.size = size;
@@ -387,13 +399,6 @@ export class Painter {
 
   get isPainting() {
     return !!this.active;
-  }
-
-  get canUndo() {
-    return this.undoStack.length > 0;
-  }
-  get canRedo() {
-    return this.redoStack.length > 0;
   }
 
   beginStroke(layer: Layer, part: PaintPart, camera: THREE.Camera, brush: BrushSettings, erase: boolean, tex: BrushTextures): boolean {
@@ -429,15 +434,14 @@ export class Painter {
   }
 
   /** Applies the brush (or eraser) to the whole layer/mask in one undoable step, without projection. */
-  fill(layer: Layer, part: PaintPart, brush: BrushSettings, erase: boolean): boolean {
-    if (!this.strokeRT || this.active) return false;
-    if (part === 'content' && layer.kind !== 'paint') return false;
-    if (part === 'mask' && !layer.mask) return false;
+  fill(layer: Layer, part: PaintPart, brush: BrushSettings, erase: boolean): PixelEntry | null {
+    if (!this.strokeRT || this.active) return null;
+    if (part === 'content' && layer.kind !== 'paint') return null;
+    if (part === 'mask' && !layer.mask) return null;
     this.begin(layer, part, brush, erase, 1);
     this.applyPaintMat.uniforms.uStencilOn.value = 0;
     this.applyStroke();
-    this.endStroke();
-    return true;
+    return this.endStroke();
   }
 
   private begin(layer: Layer, part: PaintPart, brush: BrushSettings, erase: boolean, strokeInit: number) {
@@ -514,59 +518,13 @@ export class Painter {
     r.setRenderTarget(null);
   }
 
-  endStroke() {
+  /** Finishes the stroke; returns its undo record (the caller owns it). */
+  endStroke(): PixelEntry | null {
     const a = this.active;
-    if (!a || !this.snapshot) return;
-    this.undoStack.push({ layer: a.layer, part: a.part, rt: this.snapshot });
-    while (this.undoStack.length > UNDO_LIMIT) this.undoStack.shift()!.rt.dispose();
-    for (const e of this.redoStack) e.rt.dispose();
-    this.redoStack = [];
+    if (!a || !this.snapshot) return null;
+    const entry = { layer: a.layer, part: a.part, rt: this.snapshot };
     this.snapshot = null;
     this.active = null;
-  }
-
-  /** Swap the layer's texture with the stored one; returns the affected layer. */
-  undo(): Layer | null {
-    return this.swap(this.undoStack, this.redoStack);
-  }
-  redo(): Layer | null {
-    return this.swap(this.redoStack, this.undoStack);
-  }
-
-  private swap(from: UndoEntry[], to: UndoEntry[]): Layer | null {
-    const e = from.pop();
-    if (!e) return null;
-    const l = e.layer;
-    if (e.part === 'content' && l.kind === 'paint') {
-      const cur = l.rt;
-      l.rt = e.rt;
-      e.rt = cur;
-    } else if (e.part === 'mask' && l.mask) {
-      const cur = l.mask.rt;
-      l.mask.rt = e.rt;
-      e.rt = cur;
-    } else {
-      e.rt.dispose();
-      return null;
-    }
-    to.push(e);
-    return l;
-  }
-
-  /** Remove history that refers to a deleted layer (or a removed mask). */
-  forgetLayer(layer: Layer, part?: PaintPart) {
-    const keep = (e: UndoEntry) => {
-      const drop = e.layer === layer && (!part || e.part === part);
-      if (drop) e.rt.dispose();
-      return !drop;
-    };
-    this.undoStack = this.undoStack.filter(keep);
-    this.redoStack = this.redoStack.filter(keep);
-  }
-
-  clearHistory() {
-    for (const e of [...this.undoStack, ...this.redoStack]) e.rt.dispose();
-    this.undoStack = [];
-    this.redoStack = [];
+    return entry;
   }
 }
