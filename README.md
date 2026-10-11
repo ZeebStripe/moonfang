@@ -40,6 +40,7 @@ It runs in the browser (WebGL2) and is built with TypeScript and three.js.
   - texture sets as PNG zips, with presets for **separate PBR maps**, **glTF/Godot/three.js (ORM)**, **Unreal (ORM, DirectX normal)**, **Unity URP (Metallic/Smoothness)** and **Unity HDRP (Mask Map)**
   - a **textured GLB** with the material applied
 - **Projects**: save and load `.opp` files, which contain the mesh, layers, masks and settings, all lossless.
+- **Multiple texture sets**: each material of the model is its own texture set, with its own layer stack, resolution and baked maps. Switch sets above the layer stack. Painting only affects the active set, while the whole model still occludes. Export writes one set of maps per texture set (`<name>_<set>_<map>.png`), and the GLB gets one material per set.
 - **Undo/redo** for strokes and fills, with 24 steps.
 - **Autosave**: every 30 seconds to browser storage, with a restore prompt the next time you start.
 - **Texture resolution**: 512–4096, and existing layers are resampled when you change it.
@@ -121,7 +122,6 @@ All painting and compositing runs on the GPU in **texture space**.
 
 ## Limitations / roadmap
 
-- One texture set per model. Multi-material models are merged into one UV space.
 - No baking from a high-poly mesh yet. Curvature and AO come from the low-poly mesh, so edges need actual bevels for edge wear.
 - Missing so far: an emissive/opacity channel, an anchor/filter system, a 2D UV view, and undo for layer operations (undo only covers strokes and fills).
 - `.sbsar` procedural material files can't be imported, since they need a proprietary engine.

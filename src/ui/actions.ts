@@ -19,7 +19,7 @@ export async function openMeshFile(app: App, file: File) {
   try {
     const mesh = await loadMeshFile(file.name, await file.arrayBuffer());
     const keep = app.mesh && app.allLayers.length > 2 && confirm('Keep the current layers on the new mesh? (Cancel starts a fresh layer stack)');
-    await app.openMesh(mesh, !keep);
+    await app.openMesh(mesh, keep ? 'keep' : 'reset');
     app.toast(`Loaded ${file.name}`);
   } catch (e) {
     app.toast(`Could not load mesh: ${errorMessage(e)}`, 'error');
@@ -28,7 +28,7 @@ export async function openMeshFile(app: App, file: File) {
 
 export async function openDemo(app: App, id: DemoMeshId) {
   if (app.busy) return;
-  await app.openMesh(loadDemoMesh(id), true);
+  await app.openMesh(loadDemoMesh(id), 'reset');
 }
 
 export async function openProjectDialog(app: App) {
@@ -105,7 +105,12 @@ export function exportDialog(app: App) {
     normalSel.replaceChildren(
       selectField('Normal map', [['opengl', 'OpenGL (Y+)'], ['directx', 'DirectX (Y−)']] as const, normal, (v) => (normal = v)),
     );
-    mapsList.replaceChildren(...preset.maps.map((m) => h('li', {}, `${baseName}_${m.suffix}.png`, h('span', { class: 'dim' }, ` · ${['', 'grey', '', 'RGB', 'RGBA'][m.channels.length]}`))));
+    const prefixes = app.sets.length > 1 ? app.sets.map((s) => `${baseName}_${safeName(s.info.name)}`) : [baseName];
+    mapsList.replaceChildren(
+      ...prefixes.flatMap((pre) =>
+        preset.maps.map((m) => h('li', {}, `${pre}_${m.suffix}.png`, h('span', { class: 'dim' }, ` · ${['', 'grey', '', 'RGB', 'RGBA'][m.channels.length]}`))),
+      ),
+    );
   };
   const nameInput = h('input', { type: 'text', value: baseName, oninput: () => ((baseName = safeName(nameInput.value)), refresh()) }) as HTMLInputElement;
   const body = h(
@@ -118,7 +123,11 @@ export function exportDialog(app: App) {
     }),
     h('div', { class: 'field' }, h('label', {}, 'File prefix'), nameInput),
     normalSel,
-    h('div', { class: 'dim small' }, `Resolution ${app.texSize}×${app.texSize}, 8-bit PNG, UV padding applied.`),
+    h(
+      'div',
+      { class: 'dim small' },
+      `${app.sets.map((s) => `${app.sets.length > 1 ? `${s.info.name}: ` : ''}${s.texSize}×${s.texSize}`).join(' · ')} — 8-bit PNG, UV padding applied.`,
+    ),
     mapsList,
   );
   refresh();
@@ -127,7 +136,7 @@ export function exportDialog(app: App) {
   const close = openModal('Export', body, [doGlb, doTextures]);
   doTextures.addEventListener('click', () => {
     try {
-      const zip = app.exporter.exportTextures(app.compositor.final, app.mesh!, { preset, normal, baseName });
+      const zip = app.exporter.exportTextures(exportSets(app), app.mesh!, { preset, normal, baseName });
       downloadBlob(zip as BlobPart, `${baseName}_textures.zip`, 'application/zip');
       app.toast('Textures exported');
       close();
@@ -137,7 +146,7 @@ export function exportDialog(app: App) {
   });
   doGlb.addEventListener('click', async () => {
     try {
-      const glb = await app.exporter.exportGLB(app.compositor.final, app.mesh!);
+      const glb = await app.exporter.exportGLB(exportSets(app), app.mesh!);
       downloadBlob(glb, `${baseName}.glb`, 'model/gltf-binary');
       app.toast('GLB exported');
       close();
@@ -145,6 +154,10 @@ export function exportDialog(app: App) {
       app.toast(`GLB export failed: ${errorMessage(e)}`, 'error');
     }
   });
+}
+
+function exportSets(app: App) {
+  return app.sets.map((s) => ({ name: s.info.name, final: s.compositor.final }));
 }
 
 export function bakeDialog(app: App) {
@@ -220,8 +233,8 @@ export function displaySettings(app: App): HTMLElement {
   return h(
     'div',
     {},
-    slider('Normal strength', { value: app.composite.normalStrength, min: 0, max: 4, step: 0.05, onInput: (x) => ((app.composite.normalStrength = x), app.invalidate()) }),
-    slider('AO strength', { value: app.composite.aoStrength, min: 0, max: 1, step: 0.01, onInput: (x) => ((app.composite.aoStrength = x), app.invalidate()) }),
+    slider('Normal strength', { value: app.composite.normalStrength, min: 0, max: 4, step: 0.05, onInput: (x) => ((app.composite.normalStrength = x), app.invalidate(true)) }),
+    slider('AO strength', { value: app.composite.aoStrength, min: 0, max: 1, step: 0.01, onInput: (x) => ((app.composite.aoStrength = x), app.invalidate(true)) }),
     slider('Exposure', { value: v.renderer.toneMappingExposure, min: 0.1, max: 3, step: 0.01, onInput: (x) => v.setExposure(x) }),
     slider('Env rotation', { value: 0, min: -180, max: 180, step: 1, onInput: (x) => v.setEnvRotation(x) }),
     checkbox('Show environment background', v.showBackground, (x) => (v.showBackground = x)),

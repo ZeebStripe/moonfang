@@ -1071,3 +1071,29 @@ table.shortcuts td {
 #viewport-wrap.stencil-edit {
   cursor: move;
 }
+
+/* ---------------------------------------------------------------- texture sets */
+.set-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px;
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--line-soft);
+}
+.set-bar > span {
+  margin-right: 4px;
+}
+.set-chip {
+  padding: 2px 9px;
+  border-radius: 10px;
+  border: 1px solid var(--line);
+  background: var(--panel-2);
+  font-size: 11.5px;
+  cursor: pointer;
+}
+.set-chip.active {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: #fff;
+}

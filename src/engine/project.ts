@@ -18,7 +18,8 @@ import type { CompositeSettings } from './compositor';
 import type { BrushSettings } from './painter';
 
 const FORMAT = 'open-painter-project';
-const VERSION = 1;
+/** 2 = per-texture-set layer stacks (version 1 had a single stack at the top level). */
+const VERSION = 2;
 
 type SerializedMask = Omit<LayerMask, 'rt'> & { data: string };
 type SerializedLayer =
@@ -26,25 +27,33 @@ type SerializedLayer =
   | (Omit<FillLayer, 'mask'> & { mask: SerializedMask | null })
   | (Omit<GroupLayer, 'mask' | 'children'> & { mask: SerializedMask | null; children: SerializedLayer[] });
 
+interface SerializedSet {
+  name: string;
+  texSize: number;
+  layers: SerializedLayer[];
+}
+
 interface ProjectJson {
   format: typeof FORMAT;
   version: number;
-  texSize: number;
+  sets?: SerializedSet[];
+  /** version 1 only */
+  texSize?: number;
   mesh: { kind: 'demo'; id: string } | { kind: 'file'; name: string; path: string };
   bake: BakeSettings;
   composite: CompositeSettings;
   brush: BrushSettings;
-  layers: SerializedLayer[];
+  /** version 1 only */
+  layers?: SerializedLayer[];
   textures?: { id: string; name: string; mime: string; path: string }[];
 }
 
 export interface ProjectState {
-  texSize: number;
+  sets: { name: string; texSize: number; layers: Layer[] }[];
   meshSource: MeshSource;
   bake: BakeSettings;
   composite: CompositeSettings;
   brush: BrushSettings;
-  layers: Layer[];
   /** images referenced by textured fill layers / the brush */
   textures: TextureAsset[];
 }
@@ -79,7 +88,7 @@ export function collectProjectFiles(renderer: THREE.WebGLRenderer, s: ProjectSta
     const { mask: _m, ...rest } = l;
     return { ...rest, mask };
   };
-  const layers = s.layers.map(serialize);
+  const sets: SerializedSet[] = s.sets.map((st) => ({ name: st.name, texSize: st.texSize, layers: st.layers.map(serialize) }));
   let mesh: ProjectJson['mesh'];
   if (s.meshSource.kind === 'demo') mesh = { kind: 'demo', id: s.meshSource.id };
   else {
@@ -92,7 +101,7 @@ export function collectProjectFiles(renderer: THREE.WebGLRenderer, s: ProjectSta
     files[path] = t.bytes;
     return { id: t.id, name: t.name, mime: t.mime, path };
   });
-  const json: ProjectJson = { format: FORMAT, version: VERSION, texSize: s.texSize, mesh, bake: s.bake, composite: s.composite, brush: s.brush, layers, textures };
+  const json: ProjectJson = { format: FORMAT, version: VERSION, sets, mesh, bake: s.bake, composite: s.composite, brush: s.brush, textures };
   files['project.json'] = strToU8(JSON.stringify(json, null, 1));
   renderer.setRenderTarget(null);
   return files;
@@ -124,9 +133,13 @@ export function readProject(bytes: Uint8Array): LoadedProject {
   return { json, meshSource, files, textures };
 }
 
-/** Recreates GPU layers; must be called after the texture size is set. */
-export function restoreLayers(renderer: THREE.WebGLRenderer, copier: Copier, p: LoadedProject): Layer[] {
-  const size = p.json.texSize;
+/** The project's texture sets (a version-1 project is a single set). */
+export function projectSets(json: ProjectJson): SerializedSet[] {
+  return json.sets ?? [{ name: 'Main', texSize: json.texSize ?? 2048, layers: json.layers ?? [] }];
+}
+
+/** Recreates one set's GPU layers at `size` (the size the set was saved with). */
+export function restoreLayers(renderer: THREE.WebGLRenderer, copier: Copier, p: LoadedProject, serialized: SerializedLayer[], size: number): Layer[] {
   const upload = (path: string) => {
     const data = p.files[path];
     if (!data || data.length !== size * size * 4) throw new Error(`Corrupt layer data: ${path}`);
@@ -166,7 +179,7 @@ export function restoreLayers(renderer: THREE.WebGLRenderer, copier: Copier, p: 
     const { mask: _m, ...rest } = s;
     return { ...rest, maps: rest.maps ?? null, tiling: rest.tiling ?? 4, mask };
   };
-  const layers = p.json.layers.map(restore);
+  const layers = serialized.map(restore);
   renderer.setRenderTarget(null);
   return layers;
 }

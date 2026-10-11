@@ -17,10 +17,10 @@ import {
   type Layer,
   type MaterialValues,
 } from './engine/layers';
-import type { PaintMesh } from './engine/meshLoader';
+import type { PaintMesh, TextureSetInfo } from './engine/meshLoader';
 import { DEFAULT_BAKE, MeshMaps, type BakeSettings } from './engine/meshMaps';
 import { DEFAULT_STENCIL, Painter, type BrushSettings, type PaintPart, type Stamp } from './engine/painter';
-import { collectProjectFiles, readProject, restoreLayers } from './engine/project';
+import { collectProjectFiles, projectSets, readProject, restoreLayers } from './engine/project';
 import { zipSync } from 'fflate';
 import { Viewport } from './engine/viewport';
 import { loadMeshSource } from './engine/meshLoader';
@@ -29,7 +29,21 @@ import { importTextureSet, Library, makeAsset, mapTextureIds, TextureStore } fro
 import { builtinTipTexture, importTipImage } from './engine/brushTips';
 
 export type Tool = 'paint' | 'erase';
-export type ChangeKind = 'layers' | 'selection' | 'brush' | 'mesh' | 'view' | 'history' | 'settings' | 'tool' | 'autosave' | 'stencil';
+export type ChangeKind = 'layers' | 'selection' | 'brush' | 'mesh' | 'view' | 'history' | 'settings' | 'tool' | 'autosave' | 'stencil' | 'set';
+
+/** One material of the mesh with its own layer stack, resolution, baked maps and composited textures. */
+export interface TextureSet {
+  info: TextureSetInfo;
+  /** the set's triangles only (draw range over the shared mesh buffers) */
+  geometry: THREE.BufferGeometry;
+  texSize: number;
+  layers: Layer[];
+  selectedId: number | null;
+  part: PaintPart;
+  maps: MeshMaps;
+  compositor: Compositor;
+  dirty: boolean;
+}
 
 const DEFAULT_BRUSH_EXTRAS = {
   symmetry: 'off' as const,
@@ -56,17 +70,15 @@ export class App {
   renderer: THREE.WebGLRenderer;
   fs = new FullscreenPass();
   copier = new Copier(this.fs);
-  maps: MeshMaps;
-  compositor: Compositor;
   painter: Painter;
   exporter: Exporter;
 
   mesh: PaintMesh | null = null;
-  layers: Layer[] = [];
-  selectedId: number | null = null;
-  part: PaintPart = 'content';
+  /** one per material of the mesh; each has its own layer stack, resolution and baked maps */
+  sets: TextureSet[] = [];
+  activeSet = 0;
+  private emptySet: TextureSet;
   tool: Tool = 'paint';
-  texSize = 2048;
   bake: BakeSettings = { ...DEFAULT_BAKE };
   composite: CompositeSettings = { normalStrength: 1, aoStrength: 1 };
   brush: BrushSettings = {
@@ -100,7 +112,6 @@ export class App {
   library = new Library(this.textures);
 
   private ready = false;
-  private needsComposite = true;
   private pendingStamps: Stamp[] = [];
   private listeners = new Set<(k: ChangeKind) => void>();
   private progressListeners = new Set<(p: ProgressInfo) => void>();
@@ -109,17 +120,23 @@ export class App {
   constructor(canvas: HTMLCanvasElement) {
     this.viewport = new Viewport(canvas);
     this.renderer = this.viewport.renderer;
-    this.maps = new MeshMaps(this.renderer, this.fs);
-    this.compositor = new Compositor(this.renderer, this.fs);
+    this.emptySet = {
+      info: { name: '—', start: 0, count: 0 },
+      geometry: new THREE.BufferGeometry(),
+      texSize: 2048,
+      layers: [],
+      selectedId: null,
+      part: 'content',
+      maps: new MeshMaps(this.renderer, this.fs),
+      compositor: new Compositor(this.renderer, this.fs),
+      dirty: false,
+    };
     this.painter = new Painter(this.renderer, this.fs, this.copier);
-    this.painter.setContext(this.maps, this.textures);
-    this.textures.onLoad(() => this.invalidate());
+    this.textures.onLoad(() => this.invalidate(true));
     // Library contents (e.g. imported brush tips) appear in the brush panel.
     this.library.onChange(() => this.emit('brush'));
     void this.library.load();
     this.exporter = new Exporter(this.renderer, this.fs);
-    this.compositor.resize(this.texSize);
-    this.painter.setTextureSize(this.texSize);
     const loop = () => {
       this.tick();
       requestAnimationFrame(loop);
@@ -148,10 +165,79 @@ export class App {
     for (const fn of this.progressListeners) fn(this.progress);
   }
 
-  /** Request a recomposite of the layer stack on the next frame. */
-  invalidate() {
-    this.needsComposite = true;
+  /** Request a recomposite on the next frame: of the active texture set, or of all sets (`all`). */
+  invalidate(all = false) {
+    if (all) for (const s of this.sets) s.dirty = true;
+    else this.set.dirty = true;
     this.revision++;
+  }
+
+  // ---------------------------------------------------------------- active texture set
+  /** The active texture set (an empty placeholder until a mesh is loaded). */
+  get set(): TextureSet {
+    return this.sets[this.activeSet] ?? this.emptySet;
+  }
+  get layers(): Layer[] {
+    return this.set.layers;
+  }
+  set layers(v: Layer[]) {
+    this.set.layers = v;
+  }
+  get selectedId(): number | null {
+    return this.set.selectedId;
+  }
+  set selectedId(v: number | null) {
+    this.set.selectedId = v;
+  }
+  get part(): PaintPart {
+    return this.set.part;
+  }
+  set part(v: PaintPart) {
+    this.set.part = v;
+  }
+  get texSize(): number {
+    return this.set.texSize;
+  }
+  get maps(): MeshMaps {
+    return this.set.maps;
+  }
+  get compositor(): Compositor {
+    return this.set.compositor;
+  }
+
+  /** Switch which texture set is painted and shown in the layer stack. */
+  activateSet(i: number) {
+    if (!this.sets[i] || this.painter.isPainting) return;
+    this.activeSet = i;
+    const s = this.set;
+    this.painter.setUVGeometry(s.geometry);
+    this.painter.setContext(s.maps, this.textures);
+    this.painter.setTextureSize(s.texSize);
+    if (this.viewport.mode === 'mask') s.dirty = true;
+    this.emit('set');
+    this.emit('layers');
+    this.emit('selection');
+    this.emit('settings');
+  }
+
+  private createSet(info: TextureSetInfo, size: number): TextureSet {
+    const mesh = this.mesh!;
+    // A view of just this set's triangles (shares the vertex buffers with the full mesh).
+    const geometry = new THREE.BufferGeometry();
+    for (const [k, a] of Object.entries(mesh.geometry.attributes)) geometry.setAttribute(k, a);
+    geometry.setDrawRange(info.start, info.count);
+    const compositor = new Compositor(this.renderer, this.fs);
+    compositor.resize(size);
+    return { info, geometry, texSize: size, layers: [], selectedId: null, part: 'content', maps: new MeshMaps(this.renderer, this.fs), compositor, dirty: true };
+  }
+
+  private defaultLayers(s: TextureSet) {
+    const base = createFillLayer('Base', DEFAULT_VALUES);
+    base.channels.height = false;
+    const paint = createPaintLayer(this.renderer, s.texSize, 'Layer 1');
+    s.layers = [base, paint];
+    s.selectedId = paint.id;
+    s.part = 'content';
   }
 
   /** Bumped on every change to the document; autosave compares against it. */
@@ -168,73 +254,91 @@ export class App {
       if (this.pendingStamps.length) {
         this.painter.addStamps(this.pendingStamps);
         this.pendingStamps = [];
-        this.needsComposite = true;
+        this.set.dirty = true;
       }
-      if (this.needsComposite) {
-        this.compositor.composite(this.layers, this.maps, this.composite, this.textures);
-        if (this.viewport.mode === 'mask') this.compositor.renderMaskPreview(this.selected, this.maps);
-        this.needsComposite = false;
+      for (const s of this.sets) {
+        if (!s.dirty) continue;
+        s.compositor.composite(s.layers, s.maps, this.composite, this.textures);
+        if (s === this.set && this.viewport.mode === 'mask') s.compositor.renderMaskPreview(this.selected, s.maps);
+        s.dirty = false;
       }
     }
     this.viewport.render();
   }
 
   // ---------------------------------------------------------------- mesh & baking
-  async openMesh(mesh: PaintMesh, resetLayers = true) {
+  /**
+   * @param layers 'reset' = fresh default stacks, 'keep' = keep the current stacks if the set count matches
+   *               (UVs are assumed unchanged), 'empty' = leave stacks empty (project loading fills them)
+   * @param sizes  texture resolution per set (defaults to the previous size or 2048)
+   */
+  async openMesh(mesh: PaintMesh, layers: 'reset' | 'keep' | 'empty' = 'reset', sizes?: number[]) {
     this.ready = false;
+    const old = this.sets;
+    const keep = layers === 'keep' && old.length === mesh.sets.length;
+    if (layers === 'keep' && !keep) this.toast('The new mesh has a different number of texture sets — starting fresh layer stacks.', 'warn');
     this.mesh = mesh;
-    this.viewport.setGeometry(mesh.geometry);
+    this.viewport.setGeometry(mesh.geometry, mesh.sets.length);
     this.painter.setMesh(mesh.geometry);
     this.painter.clearHistory();
-    if (resetLayers) {
-      this.layers.forEach(disposeLayer);
-      this.layers = [];
+    this.sets = mesh.sets.map((info, i) => this.createSet(info, sizes?.[i] ?? old[i]?.texSize ?? 2048));
+    for (const [i, s] of old.entries()) {
+      if (keep) {
+        this.sets[i].layers = s.layers;
+        this.sets[i].selectedId = s.selectedId;
+      } else s.layers.forEach(disposeLayer);
+      s.maps.dispose();
+      s.compositor.dispose();
     }
+    this.activeSet = 0;
+    this.activateSet(0);
     await this.rebake();
-    if (resetLayers) {
-      const base = createFillLayer('Base', DEFAULT_VALUES);
-      base.channels.height = false;
-      const paint = createPaintLayer(this.renderer, this.texSize, 'Layer 1');
-      this.layers = [base, paint];
-      this.selectedId = paint.id;
-      this.part = 'content';
-    }
+    if (layers === 'reset' || (layers === 'keep' && !keep)) this.sets.forEach((s) => this.defaultLayers(s));
     for (const w of mesh.warnings) this.toast(w, 'warn');
     this.emit('mesh');
+    this.emit('set');
     this.emit('layers');
     this.emit('selection');
   }
 
-  async rebake() {
+  /** Bakes mesh maps for the given sets (default: all). */
+  async rebake(sets: TextureSet[] = this.sets) {
     if (!this.mesh) return;
     this.ready = false;
     this.setProgress(true, 'Baking mesh maps', 0);
     try {
-      await this.maps.bake(this.mesh, this.texSize, this.bake, (v, label) => this.setProgress(true, `Baking: ${label}`, v));
+      for (const [n, s] of sets.entries()) {
+        const prefix = this.sets.length > 1 ? `${s.info.name} — ` : '';
+        await s.maps.bake(this.mesh, s.geometry, s.texSize, this.bake, (v, label) =>
+          this.setProgress(true, `Baking ${prefix}${label}`, (n + v) / sets.length),
+        );
+        this.bindViewportTextures(s);
+      }
     } finally {
       this.setProgress(false);
     }
-    this.bindViewportTextures();
     this.ready = true;
-    this.invalidate();
+    this.invalidate(true);
   }
 
-  private bindViewportTextures() {
-    const f = this.compositor.final;
-    this.viewport.setTextures({
+  private bindViewportTextures(s: TextureSet) {
+    const f = s.compositor.final;
+    this.viewport.setTextures(this.sets.indexOf(s), {
       baseColor: f.textures[0],
       orm: f.textures[1],
       normal: f.textures[2],
-      meshA: this.maps.meshATex,
-      meshB: this.maps.meshBTex,
-      mask: this.compositor.maskPreview.texture,
+      meshA: s.maps.meshATex,
+      meshB: s.maps.meshBTex,
+      mask: s.compositor.maskPreview.texture,
     });
   }
 
+  /** Changes the active texture set's resolution, resampling its layers. */
   async setResolution(size: number) {
-    if (size === this.texSize || !this.mesh) return;
+    const s = this.set;
+    if (size === s.texSize || !this.mesh) return;
     const r = this.renderer;
-    for (const l of walkLayers(this.layers)) {
+    for (const l of walkLayers(s.layers)) {
       if (l.kind === 'paint') {
         const rt = createPaintRT(size);
         this.copier.copy(r, l.rt.textures, rt);
@@ -249,10 +353,12 @@ export class App {
       }
     }
     r.setRenderTarget(null);
-    this.texSize = size;
-    this.compositor.resize(size);
+    s.texSize = size;
+    s.compositor.resize(size);
     this.painter.setTextureSize(size);
-    await this.rebake();
+    // Undo snapshots of this set have the old size.
+    this.painter.clearHistory();
+    await this.rebake([s]);
     this.emit('settings');
     this.emit('history');
   }
@@ -685,7 +791,7 @@ export class App {
     if (this.painter.isPainting) return;
     const l = this.painter.undo();
     if (l) {
-      this.invalidate();
+      this.invalidate(true);
       this.emit('history');
     }
   }
@@ -694,7 +800,7 @@ export class App {
     if (this.painter.isPainting) return;
     const l = this.painter.redo();
     if (l) {
-      this.invalidate();
+      this.invalidate(true);
       this.emit('history');
     }
   }
@@ -708,12 +814,11 @@ export class App {
   projectFiles(): Record<string, Uint8Array> {
     if (!this.mesh) throw new Error('Nothing to save.');
     return collectProjectFiles(this.renderer, {
-      texSize: this.texSize,
+      sets: this.sets.map((s) => ({ name: s.info.name, texSize: s.texSize, layers: s.layers })),
       meshSource: this.mesh.source,
       bake: this.bake,
       composite: this.composite,
       brush: this.brush,
-      layers: this.layers,
       textures: this.usedTextureIds()
         .map((id) => this.textures.asset(id))
         .filter((a): a is NonNullable<typeof a> => !!a),
@@ -722,6 +827,7 @@ export class App {
 
   async loadProject(bytes: Uint8Array) {
     const p = readProject(bytes);
+    const psets = projectSets(p.json);
     this.setProgress(true, 'Loading project', 0);
     let mesh: PaintMesh;
     try {
@@ -729,23 +835,22 @@ export class App {
     } finally {
       this.setProgress(false);
     }
-    this.layers.forEach(disposeLayer);
-    this.layers = [];
-    this.texSize = p.json.texSize;
     this.bake = { ...DEFAULT_BAKE, ...p.json.bake };
     this.composite = { ...this.composite, ...p.json.composite };
-    // Older projects predate textured materials; keep the fields defined.
-    const brush = { ...this.brush, ...p.json.brush };
     // Projects from older versions lack newer brush fields; fill them from the defaults.
+    const brush = { ...this.brush, ...p.json.brush };
     this.brush = { ...DEFAULT_BRUSH_EXTRAS, ...brush, maps: brush.maps ?? null, tiling: brush.tiling ?? 4, stencil: { ...DEFAULT_STENCIL, ...brush.stencil } };
     await Promise.all(p.textures.map((t) => this.textures.add(t)));
-    this.compositor.resize(this.texSize);
-    this.painter.setTextureSize(this.texSize);
-    await this.openMesh(mesh, false);
-    this.layers = restoreLayers(this.renderer, this.copier, p);
-    this.selectedId = this.layers[this.layers.length - 1]?.id ?? null;
-    this.part = 'content';
-    this.invalidate();
+    await this.openMesh(mesh, 'empty', mesh.sets.map((_, i) => psets[i]?.texSize ?? 2048));
+    if (psets.length !== mesh.sets.length) this.toast(`Project has ${psets.length} texture set(s) but the mesh has ${mesh.sets.length}; matched by order.`, 'warn');
+    this.sets.forEach((s, i) => {
+      const ps = psets[i];
+      if (!ps) return this.defaultLayers(s);
+      s.layers = restoreLayers(this.renderer, this.copier, p, ps.layers, s.texSize);
+      s.selectedId = s.layers[s.layers.length - 1]?.id ?? null;
+      s.part = 'content';
+    });
+    this.invalidate(true);
     this.emit('layers');
     this.emit('selection');
     this.emit('brush');

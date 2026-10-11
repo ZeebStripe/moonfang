@@ -104,6 +104,13 @@ void main() {
 }
 `;
 
+export interface ExportSet {
+  name: string;
+  final: THREE.WebGLRenderTarget;
+}
+
+const fileSafe = (s: string) => s.replace(/[^\w\-]+/g, '_').replace(/^_+|_+$/g, '') || 'set';
+
 export interface ExportOptions {
   preset: ExportPreset;
   normal: 'opengl' | 'directx';
@@ -148,7 +155,17 @@ export class Exporter {
   }
 
   /** Returns a zip containing one PNG per map of the preset. */
-  exportTextures(final: THREE.WebGLRenderTarget, mesh: PaintMesh, o: ExportOptions): Uint8Array {
+  /** One zip for all texture sets; with several sets the set name goes into each file name. */
+  exportTextures(sets: ExportSet[], mesh: PaintMesh, o: ExportOptions): Uint8Array {
+    const files: Record<string, Uint8Array> = {};
+    for (const set of sets) {
+      const prefix = sets.length > 1 ? `${o.baseName}_${fileSafe(set.name)}` : o.baseName;
+      Object.assign(files, this.exportSet(set.final, mesh, o, prefix));
+    }
+    return zipSync(files, { level: 0 });
+  }
+
+  private exportSet(final: THREE.WebGLRenderTarget, mesh: PaintMesh, o: ExportOptions, prefix: string): Record<string, Uint8Array> {
     const size = final.width;
     // glTF UVs have v=0 at the image top; everything else uses the OpenGL convention (v=0 at the bottom).
     const gltfUVs = isGltfSource(mesh);
@@ -160,13 +177,27 @@ export class Exporter {
       if (isNormal && o.normal === 'directx') flip = !flip;
       const rgba = this.renderMap(final, map, isNormal && flip);
       const png = encodePNG(rgba, size, size, map.channels.length, !gltfUVs);
-      files[`${o.baseName}_${map.suffix}.png`] = png;
+      files[`${prefix}_${map.suffix}.png`] = png;
     }
-    return zipSync(files, { level: 0 });
+    return files;
   }
 
   /** Exports the mesh in its original placement with the painted material as a binary glTF. */
-  async exportGLB(final: THREE.WebGLRenderTarget, mesh: PaintMesh): Promise<ArrayBuffer> {
+  /** Exports the mesh with one material per texture set (geometry groups map to glTF primitives). */
+  async exportGLB(sets: ExportSet[], mesh: PaintMesh): Promise<ArrayBuffer> {
+    const materials = sets.map((s) => this.glbMaterial(s.final, `${mesh.name}_${s.name}`));
+    const geometry = mesh.geometry.clone();
+    geometry.deleteAttribute('curv');
+    geometry.scale(1 / mesh.scale, 1 / mesh.scale, 1 / mesh.scale);
+    geometry.translate(mesh.center.x, mesh.center.y, mesh.center.z);
+    const out = new THREE.Mesh(geometry, materials);
+    out.name = mesh.name;
+    const result = await new GLTFExporter().parseAsync(out, { binary: true });
+    geometry.dispose();
+    return result as ArrayBuffer;
+  }
+
+  private glbMaterial(final: THREE.WebGLRenderTarget, name: string): THREE.MeshStandardMaterial {
     const size = final.width;
     // GLTFExporter re-encodes textures through a 2D canvas, so hand it canvases. GL row 0 (v = 0) goes to the
     // canvas top, matching glTF's top-left UV origin for the raw UVs we export.
@@ -192,16 +223,8 @@ export class Exporter {
       roughness: 1,
       metalness: 1,
     });
-    material.name = `${mesh.name}_material`;
-    const geometry = mesh.geometry.clone();
-    geometry.deleteAttribute('curv');
-    geometry.scale(1 / mesh.scale, 1 / mesh.scale, 1 / mesh.scale);
-    geometry.translate(mesh.center.x, mesh.center.y, mesh.center.z);
-    const out = new THREE.Mesh(geometry, material);
-    out.name = mesh.name;
-    const result = await new GLTFExporter().parseAsync(out, { binary: true });
-    geometry.dispose();
-    return result as ArrayBuffer;
+    material.name = name;
+    return material;
   }
 }
 

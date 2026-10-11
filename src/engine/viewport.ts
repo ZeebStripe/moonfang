@@ -51,10 +51,10 @@ export class Viewport {
   camera: THREE.PerspectiveCamera;
   controls: OrbitControls;
   mesh: THREE.Mesh | null = null;
-  pbr: THREE.MeshPhysicalMaterial;
-  channelMat: THREE.ShaderMaterial;
+  pbrs: THREE.MeshPhysicalMaterial[] = [];
+  channelMats: THREE.ShaderMaterial[] = [];
   mode: ViewMode = 'material';
-  private textures: ViewportTextures | null = null;
+  private textures: (ViewportTextures | null)[] = [];
   private envTexture: THREE.Texture | null = null;
   private pmrem: THREE.PMREMGenerator;
   private _showBackground = true;
@@ -83,26 +83,24 @@ export class Viewport {
     this.pmrem = new THREE.PMREMGenerator(this.renderer);
     this.setEnvironment(this.pmrem.fromScene(new RoomEnvironment(), 0.04).texture);
 
-    this.pbr = new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 1, metalness: 1, side: THREE.DoubleSide });
-    this.channelMat = new THREE.ShaderMaterial({
-      uniforms: { uTex: { value: null }, uMode: { value: 0 } },
-      vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
-      fragmentShader: CHANNEL_VIEW_FRAG,
-      side: THREE.DoubleSide,
-      toneMapped: false,
-    });
   }
 
-  setGeometry(geometry: THREE.BufferGeometry) {
+  /** One material per texture set (the geometry's groups pick them). */
+  setGeometry(geometry: THREE.BufferGeometry, setCount: number) {
     if (this.mesh) this.scene.remove(this.mesh);
-    this.mesh = new THREE.Mesh(geometry, this.pbr);
+    for (const m of [...this.pbrs, ...this.channelMats]) m.dispose();
+    this.pbrs = Array.from({ length: setCount }, () => new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 1, metalness: 1, side: THREE.DoubleSide }));
+    this.channelMats = Array.from({ length: setCount }, () => this.makeChannelMat());
+    this.textures = new Array(setCount).fill(null);
+    this.mesh = new THREE.Mesh(geometry, this.pbrs);
     this.scene.add(this.mesh);
     this.frame();
   }
 
-  setTextures(t: ViewportTextures) {
-    this.textures = t;
-    const m = this.pbr;
+  setTextures(set: number, t: ViewportTextures) {
+    this.textures[set] = t;
+    const m = this.pbrs[set];
+    if (!m) return;
     m.map = t.baseColor;
     m.roughnessMap = t.orm;
     m.metalnessMap = t.orm;
@@ -117,29 +115,41 @@ export class Viewport {
     this.applyMode();
   }
 
+  private makeChannelMat() {
+    return new THREE.ShaderMaterial({
+      uniforms: { uTex: { value: null }, uMode: { value: 0 } },
+      vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: CHANNEL_VIEW_FRAG,
+      side: THREE.DoubleSide,
+      toneMapped: false,
+    });
+  }
+
   private applyMode() {
-    if (!this.mesh || !this.textures) return;
+    if (!this.mesh) return;
     if (this.mode === 'material') {
-      this.mesh.material = this.pbr;
+      this.mesh.material = this.pbrs;
       return;
     }
-    const t = this.textures;
-    const map: Record<Exclude<ViewMode, 'material'>, [THREE.Texture, number]> = {
-      baseColor: [t.baseColor, 0],
-      roughness: [t.orm, 3],
-      metallic: [t.orm, 4],
-      height: [t.orm, 5],
-      normal: [t.normal, 1],
-      ao: [t.meshA, 5],
-      curvature: [t.meshB, 5],
-      worldNormal: [t.meshB, 1],
-      position: [t.meshA, 1],
-      mask: [t.mask, 2],
-    };
-    const [tex, mode] = map[this.mode];
-    this.channelMat.uniforms.uTex.value = tex;
-    this.channelMat.uniforms.uMode.value = mode;
-    this.mesh.material = this.channelMat;
+    this.textures.forEach((t, i) => {
+      if (!t) return;
+      const map: Record<Exclude<ViewMode, 'material'>, [THREE.Texture, number]> = {
+        baseColor: [t.baseColor, 0],
+        roughness: [t.orm, 3],
+        metallic: [t.orm, 4],
+        height: [t.orm, 5],
+        normal: [t.normal, 1],
+        ao: [t.meshA, 5],
+        curvature: [t.meshB, 5],
+        worldNormal: [t.meshB, 1],
+        position: [t.meshA, 1],
+        mask: [t.mask, 2],
+      };
+      const [tex, mode] = map[this.mode as Exclude<ViewMode, 'material'>];
+      this.channelMats[i].uniforms.uTex.value = tex;
+      this.channelMats[i].uniforms.uMode.value = mode;
+    });
+    this.mesh.material = this.channelMats;
   }
 
   setEnvironment(tex: THREE.Texture) {

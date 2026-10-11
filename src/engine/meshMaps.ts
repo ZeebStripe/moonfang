@@ -140,12 +140,16 @@ export class MeshMaps {
     private fs: FullscreenPass,
   ) {}
 
-  async bake(mesh: PaintMesh, size: number, settings: BakeSettings, onProgress?: (p: number, label: string) => void) {
+  /**
+   * @param uvGeometry the texture set's triangles (UV-space passes); the whole mesh still occludes for AO.
+   */
+  async bake(mesh: PaintMesh, uvGeometry: THREE.BufferGeometry, size: number, settings: BakeSettings, onProgress?: (p: number, label: string) => void) {
     const r = this.renderer;
     this.dispose();
     this.size = size;
     applyCurvatureGain(mesh, settings.curvatureGain);
-    const pass = new MeshPass(mesh.geometry);
+    const pass = new MeshPass(uvGeometry);
+    const occluders = new MeshPass(mesh.geometry);
 
     this.coverage = createRT(size, size);
     this.seeds = createRT(size, size, { type: THREE.FloatType });
@@ -212,7 +216,7 @@ export class MeshMaps {
       cam.lookAt(0, 0, 0);
       cam.updateMatrixWorld();
       clearTarget(r, shadow, 1e4, 1e4, 1e4, 1);
-      pass.render(r, this.depthMat, shadow, cam);
+      occluders.render(r, this.depthMat, shadow, cam);
       u.uDir.value.copy(dir);
       u.uLightView.value.copy(cam.matrixWorldInverse);
       u.uLightVP.value.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);

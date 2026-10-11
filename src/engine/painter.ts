@@ -278,6 +278,7 @@ export class Painter {
   private size = 0;
   private active: { layer: Layer; part: PaintPart; erase: boolean; brush: BrushSettings } | null = null;
   private pass: MeshPass | null = null;
+  private depthPass: MeshPass | null = null;
   private stampScratch = Array.from({ length: MAX_STAMPS }, () => new THREE.Vector4());
 
   private depthMat = (() => {
@@ -364,18 +365,24 @@ export class Painter {
     private copier: Copier,
   ) {}
 
+  /** Whole model: used for the occlusion depth pass and the symmetry center. */
   setMesh(geometry: THREE.BufferGeometry) {
     geometry.computeBoundingBox();
     geometry.boundingBox!.getCenter(this.stampMat.uniforms.uMirrorCenter.value);
+    this.depthPass = new MeshPass(geometry);
+  }
+
+  /** The active texture set's triangles: only these receive paint. */
+  setUVGeometry(geometry: THREE.BufferGeometry) {
     this.pass = new MeshPass(geometry);
   }
 
+  /** Resizes the stroke buffer (history is kept: entries swap whole layer textures of their own size). */
   setTextureSize(size: number) {
     if (size === this.size) return;
     this.size = size;
     this.strokeRT?.dispose();
     this.strokeRT = createRT(size, size);
-    this.clearHistory();
   }
 
   get isPainting() {
@@ -390,7 +397,7 @@ export class Painter {
   }
 
   beginStroke(layer: Layer, part: PaintPart, camera: THREE.Camera, brush: BrushSettings, erase: boolean, tex: BrushTextures): boolean {
-    if (!this.pass || !this.strokeRT) return false;
+    if (!this.pass || !this.depthPass || !this.strokeRT) return false;
     if (part === 'content' && layer.kind !== 'paint') return false;
     if (part === 'mask' && !layer.mask) return false;
     const r = this.renderer;
@@ -400,7 +407,7 @@ export class Painter {
       this.depthRT = createRT(buf.x, buf.y, { type: THREE.FloatType, depth: true });
     }
     clearTarget(r, this.depthRT, 1e6, 1e6, 1e6, 1);
-    this.pass.render(r, this.depthMat, this.depthRT, camera);
+    this.depthPass.render(r, this.depthMat, this.depthRT, camera);
 
     const u = this.stampMat.uniforms;
     camera.updateMatrixWorld();

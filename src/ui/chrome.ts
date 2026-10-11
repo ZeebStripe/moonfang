@@ -126,7 +126,7 @@ export function mountStatusbar(app: App, root: HTMLElement) {
   const gpu = dbg ? String(gl.getParameter(dbg.UNMASKED_RENDERER_WEBGL)).replace(/^ANGLE \((.*)\)$/, '$1').split(',').slice(0, 2).join(',') : '';
   const sync = () => {
     const tris = app.mesh ? app.mesh.geometry.attributes.position.count / 3 : 0;
-    right.textContent = [app.mesh ? `${app.mesh.name} · ${Math.round(tris).toLocaleString()} tris` : 'No mesh', `${app.texSize}²`, `${app.allLayers.length} layers`, app.lastAutosave ? `autosaved ${new Date(app.lastAutosave).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '', gpu]
+    right.textContent = [app.mesh ? `${app.mesh.name} · ${Math.round(tris).toLocaleString()} tris` : 'No mesh', app.sets.length > 1 ? `set ${app.set.info.name}` : '', `${app.texSize}²`, `${app.allLayers.length} layers`, app.lastAutosave ? `autosaved ${new Date(app.lastAutosave).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}` : '', gpu]
       .filter(Boolean)
       .join('  ·  ');
   };

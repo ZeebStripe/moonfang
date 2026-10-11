@@ -23,7 +23,28 @@ export function mountLayersPanel(app: App, root: HTMLElement) {
       iconButton(ICONS.trash, 'Delete layer', () => app.selectedId && app.deleteLayer(app.selectedId)),
     ),
   );
-  root.append(header, list);
+  const setBar = h('div', { class: 'set-bar' });
+  root.append(header, setBar, list);
+
+  function renderSets() {
+    setBar.replaceChildren();
+    setBar.style.display = app.sets.length > 1 ? '' : 'none';
+    if (app.sets.length < 2) return;
+    setBar.append(
+      h('span', { class: 'dim small' }, 'Texture set'),
+      ...app.sets.map((s, i) =>
+        h(
+          'button',
+          {
+            class: `set-chip ${i === app.activeSet ? 'active' : ''}`,
+            title: `${s.info.name} · ${s.texSize}² · ${s.layers.length} layer(s)`,
+            onclick: () => app.activateSet(i),
+          },
+          s.info.name,
+        ),
+      ),
+    );
+  }
 
   function openMaskMenu(anchor: HTMLElement) {
     const l = app.selected;
@@ -198,6 +219,7 @@ export function mountLayersPanel(app: App, root: HTMLElement) {
 
   app.on((k) => {
     if (k === 'layers' || k === 'selection' || k === 'history' || k === 'mesh') render();
+    if (k === 'set' || k === 'mesh') renderSets();
   });
   render();
 }

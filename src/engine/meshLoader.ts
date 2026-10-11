@@ -20,11 +20,14 @@ export interface PaintMesh {
   /** Raw per-vertex mean curvature (normalised space); mapped to the `curv` attribute by applyCurvatureGain. */
   curvRaw: Float32Array;
   warnings: string[];
+  /** texture sets (one per source material), in vertex order */
+  sets: TextureSetInfo[];
 }
 
-export type DemoMeshId = 'roundedCube' | 'vase' | 'torusKnot' | 'sphere';
+export type DemoMeshId = 'roundedCube' | 'vase' | 'torusKnot' | 'sphere' | 'twoSets';
 export const DEMO_MESHES: { id: DemoMeshId; label: string }[] = [
   { id: 'roundedCube', label: 'Rounded Cube' },
+  { id: 'twoSets', label: 'Cube + Gem (2 texture sets)' },
   { id: 'vase', label: 'Vase' },
   { id: 'torusKnot', label: 'Torus Knot' },
   { id: 'sphere', label: 'Sphere' },
@@ -44,8 +47,8 @@ export async function loadMeshFile(name: string, bytes: ArrayBuffer): Promise<Pa
     throw new Error(`Unsupported mesh format ".${ext}". Use .glb, .gltf (embedded), .obj or .fbx.`);
   }
   const warnings: string[] = [];
-  const geometry = collectGeometry(root, warnings);
-  return buildPaintMesh(name.replace(/\.[^.]+$/, ''), geometry, { kind: 'file', name, bytes }, warnings);
+  const { geometry, sets } = collectGeometry(root, warnings);
+  return buildPaintMesh(name.replace(/\.[^.]+$/, ''), geometry, { kind: 'file', name, bytes }, warnings, sets);
 }
 
 export function loadDemoMesh(id: DemoMeshId): PaintMesh {
@@ -63,6 +66,18 @@ export function loadDemoMesh(id: DemoMeshId): PaintMesh {
     case 'sphere':
       g = new THREE.SphereGeometry(1, 96, 64);
       break;
+    case 'twoSets': {
+      const body = roundedCube(0.14).toNonIndexed();
+      const gem = new THREE.IcosahedronGeometry(0.55, 3); // already non-indexed
+      gem.translate(0, 1.6, 0);
+      const merged = mergeGeometries([body, gem], false)!;
+      const label = DEMO_MESHES.find((d) => d.id === id)!.label;
+      const n = body.attributes.position.count;
+      return buildPaintMesh(label, merged, { kind: 'demo', id }, [], [
+        { name: 'Body', start: 0, count: n },
+        { name: 'Gem', start: n, count: gem.attributes.position.count },
+      ]);
+    }
   }
   const label = DEMO_MESHES.find((d) => d.id === id)!.label;
   return buildPaintMesh(label, g, { kind: 'demo', id }, []);
@@ -72,11 +87,37 @@ export async function loadMeshSource(src: MeshSource): Promise<PaintMesh> {
   return src.kind === 'demo' ? loadDemoMesh(src.id) : loadMeshFile(src.name, src.bytes);
 }
 
-function collectGeometry(root: THREE.Object3D, warnings: string[]): THREE.BufferGeometry {
+/** One texture set = one material of the source model; a contiguous vertex range of the merged geometry. */
+export interface TextureSetInfo {
+  name: string;
+  start: number;
+  count: number;
+}
+
+interface Part {
+  geometry: THREE.BufferGeometry;
+  key: string;
+  name: string;
+}
+
+/** Vertex sub-range of a non-indexed geometry (position / normal / uv only). */
+function sliceGeometry(g: THREE.BufferGeometry, start: number, count: number): THREE.BufferGeometry {
+  const out = new THREE.BufferGeometry();
+  for (const key of ['position', 'normal', 'uv'] as const) {
+    const a = g.attributes[key] as THREE.BufferAttribute;
+    const f = new Float32Array(count * a.itemSize);
+    for (let i = 0; i < count; i++) for (let c = 0; c < a.itemSize; c++) f[i * a.itemSize + c] = a.getComponent(start + i, c);
+    out.setAttribute(key, new THREE.BufferAttribute(f, a.itemSize));
+  }
+  return out;
+}
+
+/** Merges all meshes, grouped by material: each distinct material becomes a texture set. */
+function collectGeometry(root: THREE.Object3D, warnings: string[]): { geometry: THREE.BufferGeometry; sets: TextureSetInfo[] } {
   root.updateMatrixWorld(true);
-  const parts: THREE.BufferGeometry[] = [];
+  const parts: Part[] = [];
   let missingUv = 0;
-  const materials = new Set<string>();
+  const names = new Map<string, string>();
   root.traverse((o) => {
     const mesh = o as THREE.Mesh;
     if (!mesh.isMesh || !mesh.geometry) return;
@@ -90,21 +131,24 @@ function collectGeometry(root: THREE.Object3D, warnings: string[]): THREE.Buffer
     if (src.attributes.normal) g.setAttribute('normal', src.attributes.normal.clone());
     g.setAttribute('uv', src.attributes.uv.clone());
     if (src.index) g.setIndex(src.index.clone());
-    g = g.index ? g.toNonIndexed() : g;
+    for (const gr of src.groups) g.addGroup(gr.start, gr.count, gr.materialIndex);
+    g = g.index ? g.toNonIndexed() : g; // keeps groups; their ranges now index vertices
     g.applyMatrix4(mesh.matrixWorld);
     if (!g.attributes.normal) g.computeVertexNormals();
-    parts.push(g);
     const mats = Array.isArray(mesh.material) ? mesh.material : [mesh.material];
-    mats.forEach((m) => materials.add(m?.uuid ?? 'none'));
+    const ranges = g.groups.length && Array.isArray(mesh.material) ? g.groups : [{ start: 0, count: g.attributes.position.count, materialIndex: 0 }];
+    for (const r of ranges) {
+      const m = mats[r.materialIndex ?? 0] ?? mats[0];
+      const key = m ? (m.name ? `name:${m.name}` : m.uuid) : 'none';
+      if (!names.has(key)) names.set(key, m?.name || `Material ${names.size + 1}`);
+      const count = Math.min(r.count, g.attributes.position.count - r.start);
+      if (count > 0) parts.push({ geometry: ranges.length === 1 ? g : sliceGeometry(g, r.start, count), key, name: names.get(key)! });
+    }
   });
   if (missingUv) warnings.push(`${missingUv} mesh part(s) without UVs were skipped. Unwrap them first (e.g. in Blender).`);
   if (!parts.length) throw new Error('No meshes with UV coordinates found in this file.');
-  if (materials.size > 1)
-    warnings.push(
-      `Model has ${materials.size} materials; Open Painter v0.1 paints everything into one texture set, so UV islands of different materials must not overlap.`,
-    );
   // Normalise attribute item sizes / types so merge succeeds.
-  for (const p of parts) {
+  for (const { geometry: p } of parts) {
     for (const key of ['position', 'normal', 'uv'] as const) {
       const a = p.attributes[key] as THREE.BufferAttribute;
       if (!(a.array instanceof Float32Array) || a.normalized) {
@@ -113,13 +157,26 @@ function collectGeometry(root: THREE.Object3D, warnings: string[]): THREE.Buffer
         p.setAttribute(key, new THREE.BufferAttribute(f, a.itemSize));
       }
     }
+    for (const k of Object.keys(p.attributes)) if (!['position', 'normal', 'uv'].includes(k)) p.deleteAttribute(k);
+    p.clearGroups();
   }
-  const merged = parts.length === 1 ? parts[0] : mergeGeometries(parts, false);
+  // Order parts by set (first appearance) so each set is one contiguous range.
+  const order = [...names.keys()];
+  parts.sort((x, y) => order.indexOf(x.key) - order.indexOf(y.key));
+  const sets: TextureSetInfo[] = [];
+  let start = 0;
+  for (const key of order) {
+    const count = parts.filter((x) => x.key === key).reduce((n, x) => n + x.geometry.attributes.position.count, 0);
+    sets.push({ name: names.get(key)!, start, count });
+    start += count;
+  }
+  const merged = parts.length === 1 ? parts[0].geometry : mergeGeometries(parts.map((x) => x.geometry), false);
   if (!merged) throw new Error('Failed to merge mesh parts.');
-  return merged;
+  if (sets.length > 1) warnings.push(`Model has ${sets.length} materials — each is its own texture set (switch sets above the layer stack).`);
+  return { geometry: merged, sets };
 }
 
-function buildPaintMesh(name: string, geometry: THREE.BufferGeometry, source: MeshSource, warnings: string[]): PaintMesh {
+function buildPaintMesh(name: string, geometry: THREE.BufferGeometry, source: MeshSource, warnings: string[], sets?: TextureSetInfo[]): PaintMesh {
   let g = geometry.index ? geometry.toNonIndexed() : geometry;
   // Keep only the attributes we need.
   const clean = new THREE.BufferGeometry();
@@ -127,6 +184,9 @@ function buildPaintMesh(name: string, geometry: THREE.BufferGeometry, source: Me
   clean.setAttribute('normal', g.attributes.normal);
   clean.setAttribute('uv', g.attributes.uv);
   g = clean;
+  sets ??= [{ name: 'Main', start: 0, count: g.attributes.position.count }];
+  // Groups let the viewport draw each texture set with its own material.
+  sets.forEach((st, i) => g.addGroup(st.start, st.count, i));
 
   const uv = g.attributes.uv as THREE.BufferAttribute;
   let outside = 0;
@@ -147,7 +207,7 @@ function buildPaintMesh(name: string, geometry: THREE.BufferGeometry, source: Me
 
   const curvRaw = computeCurvature(g);
   g.setAttribute('curv', new THREE.BufferAttribute(new Float32Array(curvRaw.length), 1));
-  const mesh: PaintMesh = { name, geometry: g, source, center, scale, bbox: g.boundingBox!.clone(), curvRaw, warnings };
+  const mesh: PaintMesh = { name, geometry: g, source, center, scale, bbox: g.boundingBox!.clone(), curvRaw, warnings, sets };
   applyCurvatureGain(mesh, 1);
   return mesh;
 }
