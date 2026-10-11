@@ -82,6 +82,45 @@ export interface SmartMaterial {
   custom?: boolean;
 }
 
+/** Layers of the cel-shaded (comic-book) smart materials, bottom → top. */
+const CEL_LAYERS: SmartLayerSpec[] = [
+  { name: 'Base Colour', values: { color: [0.86, 0.6, 0.3], roughness: 0.8, metallic: 0, height: 0.5 }, channels: { height: false }, variation: 0.06, variationScale: 40 },
+  {
+    name: 'Shadow Band',
+    values: { color: [0.58, 0.52, 0.66], roughness: 0.8, metallic: 0, height: 0.5 },
+    channels: { roughness: false, metallic: false, height: false },
+    blend: 'multiply',
+    generator: { type: 'ao', amount: 0.45, contrast: 1, noiseAmount: 0.06, noiseScale: 10 },
+  },
+  {
+    name: 'Highlight Band',
+    values: { color: [0.32, 0.28, 0.2], roughness: 0.8, metallic: 0, height: 0.5 },
+    channels: { roughness: false, metallic: false, height: false },
+    blend: 'screen',
+    opacity: 0.7,
+    generator: { type: 'facing', amount: 0.3, contrast: 1, noiseAmount: 0.08, noiseScale: 8 },
+  },
+  {
+    name: 'Hatching',
+    values: { color: [0.03, 0.025, 0.02], roughness: 0.9, metallic: 0, height: 0.5 },
+    channels: { metallic: false, height: false },
+    opacity: 0.85,
+    generator: { type: 'hatch', amount: 0.5, contrast: 0.9, noiseScale: 60, noiseAmount: 0.1 },
+  },
+  {
+    name: 'Crease Ink',
+    values: { color: [0.03, 0.025, 0.02], roughness: 0.9, metallic: 0, height: 0.5 },
+    channels: { metallic: false, height: false },
+    generator: { type: 'curvature', invert: true, amount: 0.82, contrast: 1, noiseAmount: 0.12, noiseScale: 18 },
+  },
+  {
+    name: 'Edge Ink',
+    values: { color: [0.03, 0.025, 0.02], roughness: 0.9, metallic: 0, height: 0.5 },
+    channels: { metallic: false, height: false },
+    generator: { type: 'edge', amount: 0.32, contrast: 1, noiseAmount: 0.18, noiseScale: 14 },
+  },
+];
+
 export const SMART_MATERIALS: SmartMaterial[] = [
   {
     id: 'worn_paint',
@@ -181,43 +220,14 @@ export const SMART_MATERIALS: SmartMaterial[] = [
     name: 'Cel Shaded Comic',
     preview:
       'repeating-linear-gradient(45deg, rgba(0,0,0,.55) 0 2px, transparent 2px 7px) 0 60% / 100% 40% no-repeat, radial-gradient(circle at 35% 30%, #f0b45a 0 40%, #b06f3a 41% 68%, #111 69% 74%, #b06f3a 75%)',
-    layers: [
-      { name: 'Base Colour', values: { color: [0.86, 0.6, 0.3], roughness: 0.8, metallic: 0, height: 0.5 }, channels: { height: false }, variation: 0.06, variationScale: 40 },
-      {
-        name: 'Shadow Band',
-        values: { color: [0.58, 0.52, 0.66], roughness: 0.8, metallic: 0, height: 0.5 },
-        channels: { roughness: false, metallic: false, height: false },
-        blend: 'multiply',
-        generator: { type: 'ao', amount: 0.45, contrast: 1, noiseAmount: 0.06, noiseScale: 10 },
-      },
-      {
-        name: 'Highlight Band',
-        values: { color: [0.32, 0.28, 0.2], roughness: 0.8, metallic: 0, height: 0.5 },
-        channels: { roughness: false, metallic: false, height: false },
-        blend: 'screen',
-        opacity: 0.7,
-        generator: { type: 'facing', amount: 0.3, contrast: 1, noiseAmount: 0.08, noiseScale: 8 },
-      },
-      {
-        name: 'Hatching',
-        values: { color: [0.03, 0.025, 0.02], roughness: 0.9, metallic: 0, height: 0.5 },
-        channels: { metallic: false, height: false },
-        opacity: 0.85,
-        generator: { type: 'hatch', amount: 0.5, contrast: 0.9, noiseScale: 60, noiseAmount: 0.1 },
-      },
-      {
-        name: 'Crease Ink',
-        values: { color: [0.03, 0.025, 0.02], roughness: 0.9, metallic: 0, height: 0.5 },
-        channels: { metallic: false, height: false },
-        generator: { type: 'curvature', invert: true, amount: 0.82, contrast: 1, noiseAmount: 0.12, noiseScale: 18 },
-      },
-      {
-        name: 'Edge Ink',
-        values: { color: [0.03, 0.025, 0.02], roughness: 0.9, metallic: 0, height: 0.5 },
-        channels: { metallic: false, height: false },
-        generator: { type: 'edge', amount: 0.32, contrast: 1, noiseAmount: 0.18, noiseScale: 14 },
-      },
-    ],
+    layers: CEL_LAYERS,
+  },
+  {
+    // Same look without the hatching: flat colour, light/shadow bands and ink outlines only.
+    id: 'cel_outline',
+    name: 'Cel Shaded Outline',
+    preview: 'radial-gradient(circle at 35% 30%, #f0b45a 0 40%, #b06f3a 41% 68%, #111 69% 74%, #b06f3a 75%)',
+    layers: CEL_LAYERS.filter((l) => l.name !== 'Hatching'),
   },
   {
     id: 'dusty_concrete',
