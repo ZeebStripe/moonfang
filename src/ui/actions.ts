@@ -3,6 +3,7 @@ import { downloadBlob, EXPORT_FORMATS, EXPORT_PRESETS, exportPrefixes, type Expo
 import { walkLayers } from '../engine/layers';
 import { loadDemoMesh, type DemoMeshId } from '../engine/meshLoader';
 import { checkbox, externalLink, h, openExternal, pickFile, pickFiles, pickFolder, selectField, slider } from './dom';
+import { emulateNumpad, setEmulateNumpad } from './input';
 import { fromFiles, MODEL_ACCEPT, openModelFiles, resolveModel } from './modelFiles';
 import { ICONS } from './icons';
 import { KOFI_URL, REPO_URL, VERSION_LABEL } from '../meta';
@@ -324,7 +325,11 @@ export function shortcutsDialog() {
     ['S (hold)', 'Stencil: drag to move, wheel to scale, Shift+wheel to rotate'],
     ['M', 'Toggle painting layer content / mask'],
     ['C', 'Cycle viewport channel'],
-    ['F', 'Frame model (UV square in the 2D view)'],
+    ['F / Home / Num .', 'Frame model (UV square in the 2D view)'],
+    ['Num 1 / 3 / 7', 'Front / Right / Top view (orthographic, like Blender); with Ctrl: Back / Left / Bottom'],
+    ['Num 5', 'Toggle orthographic / perspective'],
+    ['Num 4 / 6 / 8 / 2', 'Orbit 15° left / right / up / down (Ctrl: pan)'],
+    ['Num 9 / + / −', 'Opposite view / zoom in / zoom out'],
     ['U', 'Toggle 3D / 2D UV view'],
     ['Ctrl + Z / Ctrl + Shift + Z', 'Undo / Redo'],
     ['Ctrl + G', 'Put the selected layer in a new folder'],
@@ -378,6 +383,12 @@ export function displaySettings(app: App): HTMLElement {
     slider('Exposure', { value: v.renderer.toneMappingExposure, min: 0.1, max: 3, step: 0.01, onInput: (x) => v.setExposure(x) }),
     slider('Env rotation', { value: 0, min: -180, max: 180, step: 1, onInput: (x) => v.setEnvRotation(x) }),
     checkbox('Show environment background', v.showBackground, (x) => (v.showBackground = x)),
+    checkbox(
+      'Emulate numpad (number row)',
+      emulateNumpad(),
+      (x) => setEmulateNumpad(x),
+      'For keyboards without a numpad: the number row works as the numpad view keys (1 / 3 / 7 front / right / top, 5 orthographic, 2 4 6 8 orbit, 9 opposite, - / = zoom). In the polygon fill tool, 1–4 still pick the selection mode.',
+    ),
     h(
       'div',
       { class: 'row' },

@@ -204,12 +204,18 @@ npm run build
 | Ctrl+G | Put the selected layer in a new folder |
 | `M` | Toggle painting the layer content / its mask |
 | `C` | Cycle the viewport channel |
-| `F` | Frame the model (the UV square in the 2D view) |
+| `F` / Home / Num `.` | Frame the model (the UV square in the 2D view) |
+| Num `1` / `3` / `7` | Front / Right / Top view, orthographic like Blender (Ctrl: Back / Left / Bottom) |
+| Num `5` | Toggle orthographic / perspective (orbiting away from an axis view returns to perspective) |
+| Num `4` `6` `8` `2` | Orbit 15° left / right / up / down (Ctrl: pan) |
+| Num `9` / `+` / `−` | Opposite view / zoom in / zoom out |
 | `U` | Toggle the 3D / 2D UV view |
 | Ctrl+Z / Ctrl+Shift+Z | Undo / Redo |
 | Ctrl+O / Ctrl+S / Ctrl+E | Open mesh / Save project / Export |
 | Ctrl+Alt+S | Save version |
 | `?` | Shortcut list |
+
+No numpad? Turn on **Display → Emulate numpad** to use the number row instead.
 
 ## How it works
 

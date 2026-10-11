@@ -7,6 +7,24 @@ import { exportDialog, openMeshDialog, saveProjectAction } from './actions';
 import { saveVersionDialog } from './saves';
 import { h } from './dom';
 
+const EMULATE_KEY = 'moonfang.emulateNumpad';
+
+/** "Emulate numpad": the number row works as the numpad (for keyboards without one), like Blender's preference. */
+export function emulateNumpad(): boolean {
+  try {
+    return localStorage.getItem(EMULATE_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+export function setEmulateNumpad(on: boolean) {
+  try {
+    localStorage.setItem(EMULATE_KEY, on ? '1' : '0');
+  } catch {
+    // Not stored (private window): it lasts until reload.
+  }
+}
+
 export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLElement) {
   const canvas = app.viewport.canvas;
   let painting = false;
@@ -394,6 +412,52 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
     }
   });
 
+  // ------------------------------------------------------------------ numpad view (Blender layout)
+  const viewLabel = h('div', { class: 'view-label' });
+  wrap.append(viewLabel);
+  const syncLabel = () => {
+    viewLabel.textContent = app.viewport.viewLabel;
+    viewLabel.style.display = app.mesh && !app.uvView ? '' : 'none';
+  };
+  app.viewport.onViewChange(syncLabel);
+  app.on((k) => (k === 'view' || k === 'mesh') && syncLabel());
+  syncLabel();
+
+  /** The numpad key pressed ('0'–'9', 'Add', 'Subtract', 'Decimal'), or the number row when emulating the numpad. */
+  function numpadKey(e: KeyboardEvent): string | null {
+    const m = /^Numpad(\d|Add|Subtract|Decimal)$/.exec(e.code);
+    if (m) return m[1];
+    if (!emulateNumpad()) return null;
+    // In the polygon fill tool 1–4 keep choosing the selection mode.
+    if (app.tool === 'select' && /^Digit[1-4]$/.test(e.code)) return null;
+    const d = /^Digit(\d)$/.exec(e.code);
+    if (d) return d[1];
+    return e.code === 'Equal' ? 'Add' : e.code === 'Minus' ? 'Subtract' : null;
+  }
+
+  /** Returns true when the key was a view key. */
+  function numpadView(e: KeyboardEvent): boolean {
+    const k = numpadKey(e);
+    if (!k || e.altKey) return false;
+    const v = app.viewport;
+    const ctrl = e.ctrlKey || e.metaKey;
+    if (k === 'Decimal') app.uvView ? v.frameUV() : v.frame();
+    else if (k === 'Add') v.zoomStep(1.2);
+    else if (k === 'Subtract') v.zoomStep(1 / 1.2);
+    else if (app.uvView || !app.mesh) return true;
+    else if (k === '1') v.viewFromAxis(ctrl ? 'back' : 'front');
+    else if (k === '3') v.viewFromAxis(ctrl ? 'left' : 'right');
+    else if (k === '7') v.viewFromAxis(ctrl ? 'bottom' : 'top');
+    else if (k === '9') v.viewOpposite();
+    else if (k === '5') v.setOrtho(!v.ortho);
+    else if (k === '4') ctrl ? v.panStep(-1, 0) : v.orbitStep('yaw', -15);
+    else if (k === '6') ctrl ? v.panStep(1, 0) : v.orbitStep('yaw', 15);
+    else if (k === '8') ctrl ? v.panStep(0, 1) : v.orbitStep('pitch', -15);
+    else if (k === '2') ctrl ? v.panStep(0, -1) : v.orbitStep('pitch', 15);
+    else return false;
+    return true;
+  }
+
   // ------------------------------------------------------------------ keyboard
   window.addEventListener('keydown', (e) => {
     if (e.key === 'Alt') {
@@ -404,6 +468,16 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
     const t = e.target as HTMLElement;
     if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) return;
     if (document.querySelector('.modal-backdrop')) return;
+    if (numpadView(e)) {
+      e.preventDefault();
+      return;
+    }
+    if (e.key === 'Home') {
+      e.preventDefault();
+      if (app.uvView) app.viewport.frameUV();
+      else app.viewport.frame();
+      return;
+    }
     const ctrl = e.ctrlKey || e.metaKey;
     const key = e.key.toLowerCase();
     if (ctrl) {
