@@ -1,14 +1,18 @@
 import * as THREE from 'three';
 import { clearTarget, createRT, FullscreenPass, MeshPass, rawMaterial, UV_SPACE_VERT } from './gl';
+import { projectionMaterial, rayAoMaterial, type HighPoly } from './highPoly';
 import { applyCurvatureGain, type PaintMesh } from './meshLoader';
 
 export interface BakeSettings {
   aoSamples: number;
   aoDistance: number;
   curvatureGain: number;
+  /** high-poly projection cage: how far rays start outside / may end inside the low-poly surface (normalised units) */
+  frontDistance: number;
+  backDistance: number;
 }
 
-export const DEFAULT_BAKE: BakeSettings = { aoSamples: 128, aoDistance: 0.6, curvatureGain: 1 };
+export const DEFAULT_BAKE: BakeSettings = { aoSamples: 128, aoDistance: 0.6, curvatureGain: 1, frontDistance: 0.02, backDistance: 0.02 };
 
 /**
  * Texture-space maps derived from the mesh:
@@ -18,6 +22,8 @@ export const DEFAULT_BAKE: BakeSettings = { aoSamples: 128, aoDistance: 0.6, cur
  *      [0] meshA: rgb = position normalised to the bounding box (per axis), a = ambient occlusion
  *      [1] meshB: rgb = world normal * 0.5 + 0.5, a = curvature (0.5 flat, >0.5 convex)
  *      [2] meshC: rgb = UV tangent (dP/du) * 0.5 + 0.5, a = bitangent handedness (1 = right-handed)
+ *      [3] meshD: rgb = baked high-poly normal in that tangent frame (flat without a high poly), a = 1 where projected
+ * With a high poly, AO and curvature come from it wherever its projection hit.
  */
 export class MeshMaps {
   size = 0;
@@ -122,18 +128,62 @@ export class MeshMaps {
   private combineMat = rawMaterial(
     `in vec2 vUv;
      uniform sampler2D uRaw0; uniform sampler2D uRaw1; uniform sampler2D uRaw2; uniform sampler2D uAo; uniform sampler2D uCov; uniform sampler2D uSeeds;
-     layout(location = 0) out vec4 o0; layout(location = 1) out vec4 o1; layout(location = 2) out vec4 o2;
+     uniform bool uHigh; uniform sampler2D uProj0; uniform sampler2D uProj1; uniform sampler2D uProj2; uniform sampler2D uRayAo;
+     uniform vec2 uTexel; uniform float uCurvK;
+     layout(location = 0) out vec4 o0; layout(location = 1) out vec4 o1; layout(location = 2) out vec4 o2; layout(location = 3) out vec4 o3;
      vec2 remap(vec2 uv){ if (texture(uCov, uv).r > 0.5) return uv; vec4 s = texture(uSeeds, uv); return s.x < 0.0 ? uv : s.xy; }
+     // Normal of a neighbouring texel, or the centre one where the neighbour has no projection (one-sided difference).
+     vec3 nAt(vec2 uv, vec3 c){ vec4 p = texture(uProj1, uv); return p.a > 0.5 && texture(uCov, uv).r > 0.5 ? p.xyz : c; }
      void main(){
        vec2 u = remap(vUv);
        vec4 a = texture(uAo, u);
        float ao = a.g > 1e-5 ? a.r / a.g : 1.0;
+       vec4 r1 = texture(uRaw1, u);
+       vec4 r2 = texture(uRaw2, u);
+       float curv = r1.a;
+       vec4 nd = vec4(0.5, 0.5, 1.0, 0.0);
+       if (uHigh && texture(uProj0, u).g > 0.5) {
+         vec4 p0 = texture(uProj0, u);
+         vec3 hn = texture(uProj1, u).xyz;
+         vec4 ra = texture(uRayAo, u);
+         if (ra.g > 0.5) ao = ra.r / ra.g;
+         nd = texture(uProj2, u);
+         // Dominant normal curvature along u and v from high-poly normal differences (cf. computeCurvature).
+         vec3 n0 = normalize(r1.xyz * 2.0 - 1.0);
+         vec3 T = normalize(r2.xyz * 2.0 - 1.0);
+         vec3 B = normalize(cross(n0, T)) * (r2.w > 0.5 ? 1.0 : -1.0);
+         vec2 dx = vec2(uTexel.x, 0.0), dy = vec2(0.0, uTexel.y);
+         float ku = dot(nAt(u + dx, hn) - nAt(u - dx, hn), T) / max(2.0 * p0.b, 1e-6);
+         float kv = dot(nAt(u + dy, hn) - nAt(u - dy, hn), B) / max(2.0 * p0.a, 1e-6);
+         float k = abs(ku) > abs(kv) ? ku : kv;
+         curv = 0.5 + 0.5 * tanh(k * uCurvK);
+       }
        o0 = vec4(texture(uRaw0, u).xyz, ao);
-       o1 = texture(uRaw1, u);
-       o2 = texture(uRaw2, u);
+       o1 = vec4(r1.xyz, curv);
+       o2 = r2;
+       o3 = nd;
      }`,
-    { uRaw0: { value: null }, uRaw1: { value: null }, uRaw2: { value: null }, uAo: { value: null }, uCov: { value: null }, uSeeds: { value: null } },
+    {
+      uRaw0: { value: null },
+      uRaw1: { value: null },
+      uRaw2: { value: null },
+      uAo: { value: null },
+      uCov: { value: null },
+      uSeeds: { value: null },
+      uHigh: { value: false },
+      uProj0: { value: null },
+      uProj1: { value: null },
+      uProj2: { value: null },
+      uRayAo: { value: null },
+      uTexel: { value: new THREE.Vector2() },
+      uCurvK: { value: 0.1 },
+    },
   );
+
+  private projMat = projectionMaterial();
+  private rayAoMat = rayAoMaterial();
+  /** whether the last bake projected a high poly */
+  usedHighPoly = false;
 
   constructor(
     private renderer: THREE.WebGLRenderer,
@@ -142,8 +192,16 @@ export class MeshMaps {
 
   /**
    * @param uvGeometry the texture set's triangles (UV-space passes); the whole mesh still occludes for AO.
+   * @param high       optional high-poly mesh: normal, AO and curvature are projected from it
    */
-  async bake(mesh: PaintMesh, uvGeometry: THREE.BufferGeometry, size: number, settings: BakeSettings, onProgress?: (p: number, label: string) => void) {
+  async bake(
+    mesh: PaintMesh,
+    uvGeometry: THREE.BufferGeometry,
+    size: number,
+    settings: BakeSettings,
+    onProgress?: (p: number, label: string) => void,
+    high: HighPoly | null = null,
+  ) {
     const r = this.renderer;
     this.dispose();
     this.size = size;
@@ -222,21 +280,65 @@ export class MeshMaps {
       u.uLightVP.value.multiplyMatrices(cam.projectionMatrix, cam.matrixWorldInverse);
       pass.render(r, this.aoAccMat, aoAcc);
       if (i % 16 === 15) {
-        onProgress?.(i / N, 'Ambient occlusion');
+        onProgress?.((i / N) * (high ? 0.3 : 1), 'Ambient occlusion');
         await nextFrame();
       }
     }
 
+    // 4b. High poly: project it along the low-poly normals, then ray-trace its AO.
+    let proj: THREE.WebGLRenderTarget | null = null;
+    let rayAo: THREE.WebGLRenderTarget | null = null;
+    if (high) {
+      onProgress?.(0.3, 'Projecting high poly');
+      await nextFrame();
+      proj = createRT(size, size, { type: THREE.HalfFloatType, count: 3 });
+      clearTarget(r, proj, 0, 0, 0, 0);
+      const pu = this.projMat.uniforms;
+      pu.bvh.value = high.bvh;
+      pu.uHighN.value = high.normals;
+      pu.uFront.value = settings.frontDistance;
+      pu.uBack.value = settings.backDistance;
+      const strips = new StripScheduler(r);
+      await strips.run(proj, size, () => pass.render(r, this.projMat, proj!));
+
+      rayAo = createRT(size, size, { type: THREE.FloatType });
+      clearTarget(r, rayAo, 0, 0, 0, 0);
+      const au = this.rayAoMat.uniforms;
+      au.bvh.value = high.bvh;
+      au.uHighN.value = high.normals;
+      au.uProj0.value = proj.textures[0];
+      au.uProj1.value = proj.textures[1];
+      au.uFront.value = settings.frontDistance;
+      au.uMaxDist.value = settings.aoDistance;
+      au.uSize.value.set(size, size);
+      const passes = Math.ceil(N / 2);
+      for (let i = 0; i < passes; i++) {
+        au.uSeed.value = i * 2.618 + 0.5;
+        await strips.run(rayAo, size, () => pass.render(r, this.rayAoMat, rayAo!));
+        onProgress?.(0.3 + (0.7 * (i + 1)) / passes, 'High-poly ambient occlusion');
+      }
+    }
+    this.usedHighPoly = !!high;
+
     // 5. Combine + dilate into the final maps.
     const c = this.combineMat.uniforms;
+    c.uHigh.value = !!high;
+    c.uProj0.value = proj?.textures[0] ?? null;
+    c.uProj1.value = proj?.textures[1] ?? null;
+    c.uProj2.value = proj?.textures[2] ?? null;
+    c.uRayAo.value = rayAo?.texture ?? null;
+    c.uTexel.value.set(1 / size, 1 / size);
+    c.uCurvK.value = 0.1 * settings.curvatureGain;
     c.uRaw0.value = raw.textures[0];
     c.uRaw1.value = raw.textures[1];
     c.uRaw2.value = raw.textures[2];
     c.uAo.value = aoAcc.texture;
     c.uCov.value = this.coverage.texture;
     c.uSeeds.value = this.seeds.texture;
-    this.maps = createRT(size, size, { type: THREE.HalfFloatType, count: 3, linear: true });
+    this.maps = createRT(size, size, { type: THREE.HalfFloatType, count: 4, linear: true });
     this.fs.render(r, this.combineMat, this.maps);
+    proj?.dispose();
+    rayAo?.dispose();
     raw.dispose();
     aoAcc.dispose();
     shadow.dispose();
@@ -253,6 +355,9 @@ export class MeshMaps {
   get meshCTex(): THREE.Texture {
     return this.maps.textures[2];
   }
+  get meshDTex(): THREE.Texture {
+    return this.maps.textures[3];
+  }
 
   dispose() {
     if (!this.size) return;
@@ -261,6 +366,43 @@ export class MeshMaps {
     this.maps?.dispose();
     this.size = 0;
   }
+}
+
+/**
+ * Runs a ray-traced UV-space pass in horizontal strips, each sized for roughly 50 ms of GPU time: one full-texture
+ * draw on a slow GPU can outlast the driver watchdog (Windows TDR, ~2 s), which resets the WebGL context.
+ * Waiting on a fence after each strip also keeps the browser responsive.
+ */
+class StripScheduler {
+  private rows = 8;
+  constructor(private r: THREE.WebGLRenderer) {}
+
+  async run(target: THREE.WebGLRenderTarget, size: number, draw: () => void) {
+    for (let y = 0; y < size; ) {
+      const h = Math.min(this.rows, size - y);
+      target.scissor.set(0, y, size, h);
+      target.scissorTest = true;
+      const t0 = performance.now();
+      draw();
+      await gpuFinish(this.r);
+      const dt = performance.now() - t0;
+      y += h;
+      if (dt < 20) this.rows = Math.min(size, this.rows * 2);
+      else if (dt > 80) this.rows = Math.max(1, this.rows >> 1);
+    }
+    target.scissorTest = false;
+    this.r.setRenderTarget(null);
+  }
+}
+
+/** Resolves once the GPU has finished all submitted work (polled, so the main thread is not blocked). */
+async function gpuFinish(r: THREE.WebGLRenderer) {
+  const gl = r.getContext() as WebGL2RenderingContext;
+  const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
+  if (!sync) return;
+  gl.flush();
+  while (gl.clientWaitSync(sync, 0, 0) === gl.TIMEOUT_EXPIRED) await new Promise((res) => setTimeout(res, 2));
+  gl.deleteSync(sync);
 }
 
 /** Yields to the browser so progress can repaint. Timer-based: rAF would stall the bake in a hidden tab. */

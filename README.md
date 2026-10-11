@@ -24,6 +24,11 @@ It runs in the browser (WebGL2) and is built with TypeScript and three.js.
   - curvature (dominant principal curvature)
   - world-space normal and position maps
   - UV padding through a jump-flood dilation, so there are no seams at mip levels
+  - **from a high-poly mesh** (Mesh → Bake Mesh Maps → High poly): its detail is ray-traced onto the low poly
+    (GPU BVH via [three-mesh-bvh](https://github.com/gkjohnson/three-mesh-bvh)) along the low-poly normals, inside an
+    adjustable front/back cage. That gives a tangent-space normal map, which sits under all painted normals and is
+    included in exports, plus high-poly AO and curvature for the smart masks. The high poly has to sit at the same
+    position and in the same units as the low poly. It is stored in the project file.
 - **Materials**: 27 PBR presets, with rendered thumbnails, that you can use on the brush or add as fill layers.
 - **Smart materials**: Worn Painted Steel, Military Paint, Rusty Iron, Weathered Copper, Scuffed Plastic, Antique Gold and Dusty Concrete. Each is a stack of fill layers driven by generators.
 - **Your own materials**, via **Library ▾** in the shelf or drag & drop:
@@ -122,7 +127,9 @@ All painting and compositing runs on the GPU in **texture space**.
 
 ## Limitations / roadmap
 
-- No baking from a high-poly mesh yet. Curvature and AO come from the low-poly mesh, so edges need actual bevels for edge wear.
+- High-poly baking projects every texture set against the whole high poly (no matching by mesh name yet), and the cage
+  is a uniform distance rather than an editable cage mesh. Normals use a per-triangle UV tangent frame, not MikkTSpace,
+  so other engines may show slight shading differences on the low poly's smoothing.
 - Missing so far: an emissive/opacity channel, an anchor/filter system, a 2D UV view, and undo for layer operations (undo only covers strokes and fills).
 - `.sbsar` procedural material files can't be imported, since they need a proprietary engine.
 - PNG export is 8-bit, so there is no 16-bit height or EXR output yet.

@@ -33,19 +33,17 @@ export const DEMO_MESHES: { id: DemoMeshId; label: string }[] = [
   { id: 'sphere', label: 'Sphere' },
 ];
 
-export async function loadMeshFile(name: string, bytes: ArrayBuffer): Promise<PaintMesh> {
+/** Parses a model file into a scene graph (.glb, embedded .gltf, .obj, .fbx). */
+export async function parseModel(name: string, bytes: ArrayBuffer): Promise<THREE.Object3D> {
   const ext = name.split('.').pop()!.toLowerCase();
-  let root: THREE.Object3D;
-  if (ext === 'glb' || ext === 'gltf') {
-    const gltf = await new GLTFLoader().parseAsync(bytes, '');
-    root = gltf.scene;
-  } else if (ext === 'obj') {
-    root = new OBJLoader().parse(new TextDecoder().decode(bytes));
-  } else if (ext === 'fbx') {
-    root = new FBXLoader().parse(bytes, '');
-  } else {
-    throw new Error(`Unsupported mesh format ".${ext}". Use .glb, .gltf (embedded), .obj or .fbx.`);
-  }
+  if (ext === 'glb' || ext === 'gltf') return (await new GLTFLoader().parseAsync(bytes, '')).scene;
+  if (ext === 'obj') return new OBJLoader().parse(new TextDecoder().decode(bytes));
+  if (ext === 'fbx') return new FBXLoader().parse(bytes, '');
+  throw new Error(`Unsupported mesh format '.${ext}'. Use .glb, .gltf (embedded), .obj or .fbx.`);
+}
+
+export async function loadMeshFile(name: string, bytes: ArrayBuffer): Promise<PaintMesh> {
+  const root = await parseModel(name, bytes);
   const warnings: string[] = [];
   const { geometry, sets } = collectGeometry(root, warnings);
   return buildPaintMesh(name.replace(/\.[^.]+$/, ''), geometry, { kind: 'file', name, bytes }, warnings, sets);

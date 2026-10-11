@@ -41,6 +41,8 @@ interface ProjectJson {
   texSize?: number;
   mesh: { kind: 'demo'; id: string } | { kind: 'file'; name: string; path: string };
   bake: BakeSettings;
+  /** reference mesh for high-poly baking */
+  highPoly?: { name: string; path: string };
   composite: CompositeSettings;
   brush: BrushSettings;
   /** version 1 only */
@@ -52,6 +54,7 @@ export interface ProjectState {
   sets: { name: string; texSize: number; layers: Layer[] }[];
   meshSource: MeshSource;
   bake: BakeSettings;
+  highPoly: { name: string; bytes: ArrayBuffer } | null;
   composite: CompositeSettings;
   brush: BrushSettings;
   /** images referenced by textured fill layers / the brush */
@@ -101,7 +104,12 @@ export function collectProjectFiles(renderer: THREE.WebGLRenderer, s: ProjectSta
     files[path] = t.bytes;
     return { id: t.id, name: t.name, mime: t.mime, path };
   });
-  const json: ProjectJson = { format: FORMAT, version: VERSION, sets, mesh, bake: s.bake, composite: s.composite, brush: s.brush, textures };
+  let highPoly: ProjectJson['highPoly'];
+  if (s.highPoly) {
+    highPoly = { name: s.highPoly.name, path: `highpoly/${s.highPoly.name}` };
+    files[highPoly.path] = new Uint8Array(s.highPoly.bytes);
+  }
+  const json: ProjectJson = { format: FORMAT, version: VERSION, sets, mesh, bake: s.bake, highPoly, composite: s.composite, brush: s.brush, textures };
   files['project.json'] = strToU8(JSON.stringify(json, null, 1));
   renderer.setRenderTarget(null);
   return files;
@@ -110,6 +118,7 @@ export function collectProjectFiles(renderer: THREE.WebGLRenderer, s: ProjectSta
 export interface LoadedProject {
   json: ProjectJson;
   meshSource: MeshSource;
+  highPoly: { name: string; bytes: ArrayBuffer } | null;
   files: Record<string, Uint8Array>;
   textures: TextureAsset[];
 }
@@ -130,7 +139,9 @@ export function readProject(bytes: Uint8Array): LoadedProject {
   const textures = (json.textures ?? [])
     .filter((t) => files[t.path])
     .map((t) => ({ id: t.id, name: t.name, mime: t.mime, bytes: files[t.path] }));
-  return { json, meshSource, files, textures };
+  const hp = json.highPoly && files[json.highPoly.path];
+  const highPoly = hp ? { name: json.highPoly!.name, bytes: hp.slice().buffer } : null;
+  return { json, meshSource, highPoly, files, textures };
 }
 
 /** The project's texture sets (a version-1 project is a single set). */

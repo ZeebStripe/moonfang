@@ -163,10 +163,63 @@ function exportSets(app: App) {
 export function bakeDialog(app: App) {
   if (!app.mesh) return app.toast('Load a mesh first.', 'warn');
   const s = { ...app.bake };
+  const hpLabel = h('span', { class: 'hp-name' });
+  const hpRemove = h('button', { class: 'btn small' }, 'Remove');
+  const hpLoad = h('button', { class: 'btn small' }, 'Load…');
+  const cage = h(
+    'div',
+    {},
+    slider('Cage front (% of size)', {
+      value: s.frontDistance * 100,
+      min: 0,
+      max: 20,
+      step: 0.1,
+      title: 'How far outside the low poly the projection rays start',
+      onInput: (v) => (s.frontDistance = v / 100),
+    }),
+    slider('Cage back (% of size)', {
+      value: s.backDistance * 100,
+      min: 0,
+      max: 20,
+      step: 0.1,
+      title: 'How far inside the low poly the high poly may still be found',
+      onInput: (v) => (s.backDistance = v / 100),
+    }),
+  );
+  const showHighPoly = () => {
+    const hp = app.highPoly;
+    hpLabel.textContent = hp ? `${hp.name} · ${hp.triangles.toLocaleString()} triangles` : 'None — maps come from the low poly';
+    hpLabel.classList.toggle('dim', !hp);
+    hpRemove.style.display = hp ? '' : 'none';
+    cage.style.display = hp ? '' : 'none';
+  };
+  hpLoad.addEventListener('click', async () => {
+    const file = await pickFile('.glb,.gltf,.obj,.fbx');
+    if (!file) return;
+    hpLabel.textContent = `Loading ${file.name}…`;
+    try {
+      await app.setHighPoly({ name: file.name, bytes: await file.arrayBuffer() });
+    } catch (e) {
+      app.toast(`Could not load high poly: ${errorMessage(e)}`, 'error');
+    }
+    showHighPoly();
+  });
+  hpRemove.addEventListener('click', async () => {
+    await app.setHighPoly(null);
+    showHighPoly();
+  });
+  showHighPoly();
   const body = h(
     'div',
     { class: 'form' },
-    h('p', { class: 'dim small' }, 'Mesh maps drive the smart masks (edge wear, dirt, dust, gradients). They are baked from the low-poly mesh itself.'),
+    h('p', { class: 'dim small' }, 'Mesh maps drive the smart masks (edge wear, dirt, dust, gradients) and the base normal map.'),
+    h('div', { class: 'field hp-row' }, h('label', {}, 'High poly'), hpLabel, hpLoad, hpRemove),
+    h(
+      'p',
+      { class: 'dim small' },
+      'With a high poly (same position and units as the low poly), its detail is projected into the normal, AO and curvature maps. Raise the cage distances if parts come out flat.',
+    ),
+    cage,
     selectField('AO samples', [[32, '32 (fast)'], [64, '64'], [128, '128'], [256, '256'], [512, '512 (slow)']] as const, s.aoSamples, (v) => (s.aoSamples = v)),
     slider('AO max distance', { value: s.aoDistance, min: 0.05, max: 2, step: 0.01, onInput: (v) => (s.aoDistance = v) }),
     slider('Curvature gain', { value: s.curvatureGain, min: 0.1, max: 4, step: 0.05, onInput: (v) => (s.curvatureGain = v) }),

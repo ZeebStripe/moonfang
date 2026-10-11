@@ -1097,3 +1097,18 @@ table.shortcuts td {
   border-color: var(--accent);
   color: #fff;
 }
+
+/* ---------------------------------------------------------------- high-poly bake */
+.hp-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.hp-row .hp-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}

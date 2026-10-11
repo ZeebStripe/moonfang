@@ -162,6 +162,7 @@ layout(location = 2) out vec4 o2;  // tangent-space normal (OpenGL)
 uniform sampler2D uAcc0;
 uniform sampler2D uAcc1;
 uniform sampler2D uMeshA;
+uniform sampler2D uMeshD;   // baked high-poly normal (flat without one)
 uniform sampler2D uCov;
 uniform sampler2D uSeeds;
 uniform vec2 uTexel;
@@ -188,6 +189,9 @@ void main() {
   if (l2 > 0.998) dxy *= sqrt(0.998 / l2);
   vec3 nd = vec3(dxy, sqrt(1.0 - dot(dxy, dxy)));
   vec3 n = normalize(vec3(nh.xy + nd.xy, nh.z * nd.z));
+  // Painted detail sits on top of the baked high-poly normal (whiteout again).
+  vec3 nb = normalize(texture(uMeshD, u).xyz * 2.0 - 1.0);
+  n = normalize(vec3(nb.xy + n.xy, nb.z * n.z));
   o0 = vec4(srgbToLinear(col), 1.0);
   o1 = vec4(ao, a1.r, a1.g, a1.b);
   o2 = vec4(n * 0.5 + 0.5, 1.0);
@@ -239,6 +243,7 @@ export class Compositor {
     uAcc0: { value: null },
     uAcc1: { value: null },
     uMeshA: { value: null },
+    uMeshD: { value: null },
     uCov: { value: null },
     uSeeds: { value: null },
     uTexel: { value: new THREE.Vector2() },
@@ -271,6 +276,7 @@ export class Compositor {
     f.uAcc0.value = result.textures[0];
     f.uAcc1.value = result.textures[1];
     f.uMeshA.value = maps.meshATex;
+    f.uMeshD.value = maps.meshDTex;
     f.uCov.value = maps.coverage.texture;
     f.uSeeds.value = maps.seeds.texture;
     f.uTexel.value.set(1 / this.size, 1 / this.size);

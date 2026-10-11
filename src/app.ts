@@ -19,6 +19,7 @@ import {
 } from './engine/layers';
 import type { PaintMesh, TextureSetInfo } from './engine/meshLoader';
 import { DEFAULT_BAKE, MeshMaps, type BakeSettings } from './engine/meshMaps';
+import { HighPoly } from './engine/highPoly';
 import { DEFAULT_STENCIL, Painter, type BrushSettings, type PaintPart, type Stamp } from './engine/painter';
 import { collectProjectFiles, projectSets, readProject, restoreLayers } from './engine/project';
 import { zipSync } from 'fflate';
@@ -80,6 +81,8 @@ export class App {
   private emptySet: TextureSet;
   tool: Tool = 'paint';
   bake: BakeSettings = { ...DEFAULT_BAKE };
+  /** optional high-poly reference: projected into the baked normal / AO / curvature maps */
+  highPoly: HighPoly | null = null;
   composite: CompositeSettings = { normalStrength: 1, aoStrength: 1 };
   brush: BrushSettings = {
     size: 36,
@@ -120,6 +123,10 @@ export class App {
   constructor(canvas: HTMLCanvasElement) {
     this.viewport = new Viewport(canvas);
     this.renderer = this.viewport.renderer;
+    // GPU-side textures are gone after a context loss; the last autosave is the way back.
+    canvas.addEventListener('webglcontextlost', () =>
+      this.toast('The GPU driver reset the 3D context. Reload the page and restore the last autosave.', 'error'),
+    );
     this.emptySet = {
       info: { name: '—', start: 0, count: 0 },
       geometry: new THREE.BufferGeometry(),
@@ -277,6 +284,13 @@ export class App {
     const old = this.sets;
     const keep = layers === 'keep' && old.length === mesh.sets.length;
     if (layers === 'keep' && !keep) this.toast('The new mesh has a different number of texture sets — starting fresh layer stacks.', 'warn');
+    // The high poly belongs to the model: refit it when the same model is reloaded, drop it for a new one.
+    if (this.highPoly && layers !== 'empty') {
+      const hp = this.highPoly;
+      this.highPoly = null;
+      if (layers === 'keep') this.highPoly = await hp.refit(mesh).catch(() => null);
+      hp.dispose();
+    }
     this.mesh = mesh;
     this.viewport.setGeometry(mesh.geometry, mesh.sets.length);
     this.painter.setMesh(mesh.geometry);
@@ -309,8 +323,13 @@ export class App {
     try {
       for (const [n, s] of sets.entries()) {
         const prefix = this.sets.length > 1 ? `${s.info.name} — ` : '';
-        await s.maps.bake(this.mesh, s.geometry, s.texSize, this.bake, (v, label) =>
-          this.setProgress(true, `Baking ${prefix}${label}`, (n + v) / sets.length),
+        await s.maps.bake(
+          this.mesh,
+          s.geometry,
+          s.texSize,
+          this.bake,
+          (v, label) => this.setProgress(true, `Baking ${prefix}${label}`, (n + v) / sets.length),
+          this.highPoly,
         );
         this.bindViewportTextures(s);
       }
@@ -331,6 +350,15 @@ export class App {
       meshB: s.maps.meshBTex,
       mask: s.compositor.maskPreview.texture,
     });
+  }
+
+  /** Loads (or with null, removes) the high-poly reference mesh. Does not rebake. */
+  async setHighPoly(file: { name: string; bytes: ArrayBuffer } | null) {
+    if (!this.mesh) return;
+    const next = file ? await HighPoly.load(file.name, file.bytes, this.mesh) : null;
+    this.highPoly?.dispose();
+    this.highPoly = next;
+    this.emit('settings');
   }
 
   /** Changes the active texture set's resolution, resampling its layers. */
@@ -817,6 +845,7 @@ export class App {
       sets: this.sets.map((s) => ({ name: s.info.name, texSize: s.texSize, layers: s.layers })),
       meshSource: this.mesh.source,
       bake: this.bake,
+      highPoly: this.highPoly && { name: this.highPoly.name, bytes: this.highPoly.bytes },
       composite: this.composite,
       brush: this.brush,
       textures: this.usedTextureIds()
@@ -841,6 +870,15 @@ export class App {
     const brush = { ...this.brush, ...p.json.brush };
     this.brush = { ...DEFAULT_BRUSH_EXTRAS, ...brush, maps: brush.maps ?? null, tiling: brush.tiling ?? 4, stencil: { ...DEFAULT_STENCIL, ...brush.stencil } };
     await Promise.all(p.textures.map((t) => this.textures.add(t)));
+    this.highPoly?.dispose();
+    this.highPoly = null;
+    if (p.highPoly) {
+      try {
+        this.highPoly = await HighPoly.load(p.highPoly.name, p.highPoly.bytes, mesh);
+      } catch (e) {
+        this.toast(`High-poly mesh could not be loaded: ${(e as Error).message}`, 'warn');
+      }
+    }
     await this.openMesh(mesh, 'empty', mesh.sets.map((_, i) => psets[i]?.texSize ?? 2048));
     if (psets.length !== mesh.sets.length) this.toast(`Project has ${psets.length} texture set(s) but the mesh has ${mesh.sets.length}; matched by order.`, 'warn');
     this.sets.forEach((s, i) => {
