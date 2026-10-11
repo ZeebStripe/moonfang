@@ -215,8 +215,11 @@ export class App {
       idle: () => this.ready && !this.busy && !this.painter.isPainting && !this.contextLost,
     });
     this.textures.onLoad(() => this.invalidate(true));
-    // Library contents (e.g. imported brush tips) appear in the brush panel.
-    this.library.onChange(() => this.emit('brush'));
+    // Library contents (e.g. imported brush tips) appear in the brush panel; a deleted decal can't stay in use.
+    this.library.onChange(() => {
+      if (this.decal.id && !this.library.decals.some((x) => x.id === this.decal.id)) this.decal.id = null;
+      this.emit('brush');
+    });
     void this.library.load();
     this.exporter = new Exporter(this.renderer, this.fs);
     const loop = () => {

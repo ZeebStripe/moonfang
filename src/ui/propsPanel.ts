@@ -213,10 +213,28 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
       h('button', { class: 'decal-pick add', title: 'Import images as decals', onclick: () => void importDecalsAction(app) }, '+'),
     );
     const maskMode = app.part === 'mask' && !!app.selected?.mask;
+    const current = decals.find((x) => x.id === d.id);
+    const manage = current
+      ? h(
+          'div',
+          { class: 'row decal-current' },
+          h('span', { class: 'dim small' }, current.name),
+          h('div', { class: 'spacer' }),
+          h(
+            'button',
+            {
+              class: 'btn small',
+              title: `Delete the decal "${current.name}" from your library (decals already placed stay painted)`,
+              onclick: () => confirm(`Delete the decal "${current.name}"? Decals already placed on the model stay painted.`) && app.library.remove(current.id),
+            },
+            'Delete decal',
+          ),
+        )
+      : null;
     return section(
       `Decal${maskMode ? ' · into mask' : ''}`,
       decals.length
-        ? picker
+        ? [picker, manage]
         : h('div', { class: 'empty-decals' }, h('div', { class: 'dim small' }, 'No decals yet. Import images (logos, stickers, signs, bullet holes…): plain backgrounds are removed and a height map is made automatically.'), picker),
       h('div', { class: 'dim small' }, 'Click the model to place it; drag before releasing to size and rotate it (Shift snaps). Mirror symmetry applies.'),
       slider('Default size', { value: b.size, min: 4, max: 400, step: 1, onInput: (v) => ((b.size = v), app.emit('tool')), title: 'Size when you click without dragging' }),

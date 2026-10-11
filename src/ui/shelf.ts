@@ -154,7 +154,7 @@ export function mountShelf(app: App, root: HTMLElement) {
         app.emit('brush');
         renderGrid();
       },
-      [],
+      [deleteButton(d.id, d.name)],
       `${d.name} · click to place it on the model, right-click for more`,
       (e) => itemMenu(app, d, e),
     );
