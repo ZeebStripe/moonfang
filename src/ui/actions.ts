@@ -65,14 +65,27 @@ export function safeName(s: string) {
 
 // ---------------------------------------------------------------------------------- dialogs
 
-export function openModal(title: string, body: HTMLElement, footer: HTMLElement[] = [], onClose?: () => void): () => void {
+/** @param centerIn center the dialog on this element (e.g. the 3D viewport) instead of the whole window */
+export function openModal(title: string, body: HTMLElement, footer: HTMLElement[] = [], onClose?: () => void, centerIn?: HTMLElement): () => void {
   let closed = false;
   const close = () => {
     if (closed) return;
     closed = true;
     backdrop.remove();
     window.removeEventListener('keydown', onKey, true);
+    window.removeEventListener('resize', place);
     onClose?.();
+  };
+  const place = () => {
+    if (!centerIn) return;
+    const r = centerIn.getBoundingClientRect();
+    Object.assign(modal.style, {
+      position: 'fixed',
+      left: `${r.left + r.width / 2}px`,
+      top: `${r.top + r.height / 2}px`,
+      transform: 'translate(-50%, -50%)',
+      maxHeight: `${Math.max(240, r.height - 24)}px`,
+    });
   };
   const onKey = (e: KeyboardEvent) => {
     if (e.key === 'Escape') {
@@ -80,17 +93,16 @@ export function openModal(title: string, body: HTMLElement, footer: HTMLElement[
       close();
     }
   };
-  const backdrop = h(
+  const modal = h(
     'div',
-    { class: 'modal-backdrop', onmousedown: (e: MouseEvent) => e.target === backdrop && close() },
-    h(
-      'div',
-      { class: 'modal', role: 'dialog', 'aria-label': title },
-      h('div', { class: 'modal-head' }, h('h2', {}, title), h('button', { class: 'icon-btn', title: 'Close', onclick: close, html: ICONS.close })),
-      h('div', { class: 'modal-body' }, body),
-      footer.length ? h('div', { class: 'modal-foot' }, ...footer) : null,
-    ),
+    { class: 'modal', role: 'dialog', 'aria-label': title },
+    h('div', { class: 'modal-head' }, h('h2', {}, title), h('button', { class: 'icon-btn', title: 'Close', onclick: close, html: ICONS.close })),
+    h('div', { class: 'modal-body' }, body),
+    footer.length ? h('div', { class: 'modal-foot' }, ...footer) : null,
   );
+  const backdrop = h('div', { class: 'modal-backdrop', onmousedown: (e: MouseEvent) => e.target === backdrop && close() }, modal);
+  place();
+  window.addEventListener('resize', place);
   window.addEventListener('keydown', onKey, true);
   document.body.append(backdrop);
   return close;

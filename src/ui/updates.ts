@@ -107,6 +107,9 @@ function showUpdate(rel: Release, manual: boolean) {
       checkbox('Check for updates when Moonfang starts', autoCheckEnabled(), (v) => setPref(PREF_AUTO, v ? null : 'off')),
     ),
     manual ? [later, download] : [skip, later, download],
+    undefined,
+    // Centered on the 3D view, clear of the toasts at its lower right.
+    document.getElementById('viewport-wrap') ?? undefined,
   );
   download.addEventListener('click', () => {
     window.open(rel.html_url, '_blank', 'noopener');
