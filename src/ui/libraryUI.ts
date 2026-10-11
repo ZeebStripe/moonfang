@@ -98,11 +98,10 @@ export function renameDialog(app: App, item: LibraryItem) {
   name.select();
 }
 
+/** Deletes from the library as one undo step (Ctrl+Z, or Undo in the toast). */
 function deleteItems(app: App, items: LibraryItem[]): boolean {
   if (!items.length) return false;
-  const what = items.length === 1 ? `"${items[0].name}"` : `${items.length} items`;
-  if (!confirm(`Delete ${what} from your library? Layers already using them keep their settings.`)) return false;
-  for (const x of items) app.library.remove(x.id);
+  app.deleteFromLibrary(items.map((x) => x.id));
   return true;
 }
 

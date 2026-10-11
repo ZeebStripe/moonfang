@@ -1,6 +1,7 @@
 import type { Layer, LayerMask } from './layers';
 import { walkLayers } from './layers';
 import type { PixelEntry } from './painter';
+import type { LibraryRemoval } from './library';
 
 /**
  * Snapshot of a layer tree: structure plus every layer's (and mask's) non-GPU properties. Snapshots reference the
@@ -88,4 +89,6 @@ export function liveRefs(list: Layer[], layers: Set<Layer>, masks: Set<LayerMask
 
 export type HistoryEntry<Owner> =
   | { kind: 'pixels'; label: string; entry: PixelEntry }
-  | { kind: 'tree'; label: string; owner: Owner; before: TreeState; after: TreeState };
+  | { kind: 'tree'; label: string; owner: Owner; before: TreeState; after: TreeState }
+  /** items deleted from the user's library (materials, smart materials, decals): undo puts them back */
+  | { kind: 'library'; label: string; removed: LibraryRemoval[] };

@@ -269,6 +269,13 @@ interface LibraryJson {
   textures?: { id: string; name: string; mime: string; path: string }[];
 }
 
+/** One item taken out of the library: which list, the item itself and its position (for undo). */
+export type LibraryRemoval =
+  | { list: 'materials'; item: MaterialPreset; index: number }
+  | { list: 'smart'; item: SmartMaterial; index: number }
+  | { list: 'tips'; item: { id: string; name: string; assetId: string }; index: number }
+  | { list: 'decals'; item: Decal; index: number };
+
 /** User materials + smart materials, persisted in IndexedDB together with their texture images. */
 export class Library {
   materials: MaterialPreset[] = [];
@@ -379,12 +386,27 @@ export class Library {
     return copy;
   }
 
-  remove(id: string) {
-    this.materials = this.materials.filter((m) => m.id !== id);
-    this.smart = this.smart.filter((s) => s.id !== id);
-    this.tips = this.tips.filter((t) => t.id !== id);
-    this.decals = this.decals.filter((d) => d.id !== id);
-    this.changed();
+  /** Removes items; returns what was removed and where, so it can be put back (undo). */
+  remove(...ids: string[]): LibraryRemoval[] {
+    const out: LibraryRemoval[] = [];
+    const take = <K extends LibraryRemoval['list']>(list: K) => {
+      const arr = this[list] as { id: string }[];
+      arr.forEach((item, index) => ids.includes(item.id) && out.push({ list, item, index } as LibraryRemoval));
+      (this[list] as { id: string }[]) = arr.filter((x) => !ids.includes(x.id));
+    };
+    (['materials', 'smart', 'tips', 'decals'] as const).forEach(take);
+    if (out.length) this.changed();
+    return out;
+  }
+
+  /** Puts removed items back at their old positions (their images are still loaded, so they are stored again). */
+  restore(removed: LibraryRemoval[]) {
+    for (const r of [...removed].sort((a, b) => a.index - b.index)) {
+      const arr = (this[r.list] as { id: string }[]).filter((x) => x.id !== r.item.id);
+      arr.splice(Math.min(r.index, arr.length), 0, r.item);
+      (this[r.list] as { id: string }[]) = arr;
+    }
+    if (removed.length) this.changed();
   }
 
   /** Exports the whole user library (or a subset) as a zip with images. */

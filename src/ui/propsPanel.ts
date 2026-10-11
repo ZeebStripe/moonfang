@@ -224,8 +224,8 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
             'button',
             {
               class: 'btn small',
-              title: `Delete the decal "${current.name}" from your library (decals already placed stay painted)`,
-              onclick: () => confirm(`Delete the decal "${current.name}"? Decals already placed on the model stay painted.`) && app.library.remove(current.id),
+              title: `Delete the decal "${current.name}" from your library (decals already placed stay painted; Ctrl+Z brings it back)`,
+              onclick: () => app.deleteFromLibrary([current.id]),
             },
             'Delete decal',
           ),

@@ -1326,6 +1326,22 @@ export class App {
     this.emit('history');
   }
 
+  /**
+   * Deletes items from the user's library as one undo step (Ctrl+Z brings them back), with an Undo button in the
+   * toast. Layers already using them keep their settings, and placed decals stay painted.
+   */
+  deleteFromLibrary(ids: string[]) {
+    const removed = this.library.remove(...ids);
+    if (!removed.length) return;
+    const what = removed.length === 1 ? `${{ materials: 'material', smart: 'smart material', tips: 'brush tip', decals: 'decal' }[removed[0].list]} "${removed[0].item.name}"` : `${removed.length} items`;
+    const entry: HistoryEntry<TextureSet> = { kind: 'library', label: `Delete ${what}`, removed };
+    this.pushHistory(entry);
+    this.toast(`Deleted ${what}`, 'info', {
+      label: 'Undo',
+      run: () => this.undoStack[this.undoStack.length - 1] === entry && this.undo(),
+    });
+  }
+
   /** Frees what only the dropped entries kept alive: stroke snapshots, and deleted layers / removed masks. */
   private dropEntries(dropped: HistoryEntry<TextureSet>[]) {
     if (!dropped.length) return;
@@ -1333,7 +1349,7 @@ export class App {
     const candMasks = new Set<LayerMask>();
     for (const d of dropped) {
       if (d.kind === 'pixels') d.entry.rt.dispose();
-      else {
+      else if (d.kind === 'tree') {
         treeRefs(d.before, candLayers, candMasks);
         treeRefs(d.after, candLayers, candMasks);
       }
@@ -1346,7 +1362,7 @@ export class App {
     }
     for (const e of [...this.undoStack, ...this.redoStack]) {
       if (e.kind === 'pixels') liveLayers.add(e.entry.layer);
-      else {
+      else if (e.kind === 'tree') {
         treeRefs(e.before, liveLayers, liveMasks);
         treeRefs(e.after, liveLayers, liveMasks);
       }
@@ -1392,6 +1408,11 @@ export class App {
   }
 
   private applyEntry(e: HistoryEntry<TextureSet>, dir: 'undo' | 'redo') {
+    if (e.kind === 'library') {
+      if (dir === 'undo') this.library.restore(e.removed);
+      else this.library.remove(...e.removed.map((r) => r.item.id));
+      return;
+    }
     if (e.kind === 'pixels') swapPixels(e.entry);
     else {
       const st = dir === 'undo' ? e.before : e.after;

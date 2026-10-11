@@ -89,7 +89,7 @@ export function mountShelf(app: App, root: HTMLElement) {
         title: `Delete "${name}" from your library`,
         onclick: (e: MouseEvent) => {
           e.stopPropagation();
-          if (confirm(`Delete "${name}" from your library?`)) app.library.remove(id);
+          app.deleteFromLibrary([id]);
         },
       },
       icon(ICONS.close),
