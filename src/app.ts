@@ -29,13 +29,25 @@ import { zipSync } from 'fflate';
 import { Viewport } from './engine/viewport';
 import { FacePicker, FaceSelection, subsetGeometry, type FaceMode, type TriRange } from './engine/faceSelect';
 import { SmartPreviews } from './engine/smartPreview';
+import { makeDecal, type DecalResult } from './engine/decals';
 import { disposeMeshEdges, loadMeshSource } from './engine/meshLoader';
 import { MATERIALS, type MaterialPreset, type SmartLayerSpec, type SmartMaterial } from './data/materials';
 import { importTextureSet, Library, makeAsset, mapTextureIds, TextureStore } from './engine/library';
 import { builtinTipTexture, importTipImage } from './engine/brushTips';
 
-/** 'select' = polygon fill: select faces, then fill them or assign materials to them */
-export type Tool = 'paint' | 'erase' | 'select';
+/**
+ * 'select' = polygon fill: select faces, then fill them or assign materials to them;
+ * 'decal' = click (and drag to size / rotate) to place the chosen decal
+ */
+export type Tool = 'paint' | 'erase' | 'select' | 'decal';
+
+/** Decal tool settings. Roughness / metallic come from the brush values when enabled. */
+export interface DecalSettings {
+  id: string | null;
+  /** how far the decal's relief raises the surface (0 = flat, 0.5 = full height range) */
+  depth: number;
+  channels: { color: boolean; roughness: boolean; metallic: boolean; height: boolean };
+}
 export type ChangeKind = 'layers' | 'selection' | 'brush' | 'mesh' | 'view' | 'history' | 'settings' | 'tool' | 'autosave' | 'stencil' | 'set' | 'gpu' | 'faces';
 
 /** One material of the mesh with its own layer stack, resolution, baked maps and composited textures. */
@@ -125,6 +137,7 @@ export class App {
   activeSet = 0;
   private emptySet: TextureSet;
   tool: Tool = 'paint';
+  decal: DecalSettings = { id: null, depth: 0.2, channels: { color: true, roughness: true, metallic: false, height: true } };
   bake: BakeSettings = { ...DEFAULT_BAKE };
   /** optional high-poly reference: projected into the baked normal / AO / curvature maps */
   highPoly: HighPoly | null = null;
@@ -1130,6 +1143,89 @@ export class App {
       stencil: this.textures.get(this.brush.stencil.imageId ?? undefined),
       dpr: this.renderer.getPixelRatio(),
     });
+  }
+
+  /**
+   * Turns images into decal brushes (background removal, trimming and a height map are automatic) and selects the
+   * last one with the decal tool.
+   */
+  async importDecals(files: { name: string; bytes: Uint8Array }[]): Promise<number> {
+    const done: DecalResult[] = [];
+    const failed: string[] = [];
+    this.setProgress(true, 'Making decals', 0);
+    try {
+      for (const [i, f] of files.entries()) {
+        this.setProgress(true, `Making decal ${i + 1} of ${files.length}`, i / files.length);
+        try {
+          const r = await makeDecal(f.name, f.bytes);
+          await Promise.all(r.assets.map((a) => this.textures.add(a)));
+          this.library.addDecal(r.decal);
+          done.push(r);
+        } catch (e) {
+          failed.push(`${f.name} (${e instanceof Error ? e.message : e})`);
+        }
+      }
+    } finally {
+      this.setProgress(false);
+    }
+    if (done.length) {
+      this.decal.id = done[done.length - 1].decal.id;
+      this.setTool('decal');
+      this.emit('brush');
+      const removed = done.filter((r) => r.background === 'removed').length;
+      const kept = done.filter((r) => r.background === 'kept').length;
+      this.toast(
+        `Made ${done.length} decal${done.length === 1 ? '' : 's'}` +
+          (removed ? ` · background removed from ${removed}` : '') +
+          (kept ? ` · ${kept} had no plain background and stay${kept === 1 ? 's' : ''} rectangular` : '') +
+          '. Click the model to place, drag to size and rotate.',
+      );
+    }
+    if (failed.length) this.toast(`Could not make a decal from ${failed.join(', ')}`, 'warn');
+    return done.length;
+  }
+
+  /**
+   * Places the selected decal as one undoable stamp: centre (x, y) and radius in drawing-buffer pixels, rotation in
+   * radians (counter-clockwise on screen).
+   */
+  placeDecal(x: number, y: number, r: number, rot: number): boolean {
+    const l = this.selected;
+    const d = this.library.decals.find((x) => x.id === this.decal.id);
+    if (!d) {
+      this.toast('Pick a decal first (Decals tab in the shelf), or import images as decals.', 'warn');
+      return false;
+    }
+    const reason = this.paintBlockedReason();
+    if (!l || reason) {
+      if (reason) this.toast(reason, 'warn');
+      return false;
+    }
+    const mask = this.textures.get(d.maskId);
+    const surface = this.textures.get(d.surfaceId);
+    if (!mask || !surface) {
+      this.toast('The decal is still loading. Try again in a moment.', 'warn');
+      return false;
+    }
+    const ch = this.decal.channels;
+    const brush: BrushSettings = {
+      ...this.brush,
+      maps: null,
+      symmetry: this.uvView ? 'off' : this.brush.symmetry,
+      channels: { ...this.brush.channels, ...ch, normal: false, emissive: false, opacity: false },
+    };
+    const ok = this.painter.beginStroke(l, this.part, this.viewport.activeCamera, brush, false, {
+      tip: null,
+      stencil: this.textures.get(this.brush.stencil.imageId ?? undefined),
+      dpr: this.renderer.getPixelRatio(),
+      decal: { mask, surface, depth: this.decal.depth },
+    });
+    if (!ok) return false;
+    this.painter.addStamps([{ x, y, r, a: 1, rot }]);
+    const entry = this.painter.endStroke();
+    this.invalidate();
+    if (entry) this.pushHistory({ kind: 'pixels', label: 'Place decal', entry });
+    return true;
   }
 
   /** Fill (or clear) the whole selected layer / mask with the brush settings; undoable. */

@@ -69,6 +69,13 @@ The app isn't among the repository's files above; it is only on the Releases pag
     can import it with *Library ▾ → Import* or by dropping it onto Moonfang. Plain `.json` libraries import too.
   - Smart materials show a **rendered preview** on the shelf, made on a small cube with its own baked maps.
   - Your library is stored on your computer (IndexedDB). Projects embed the textures they use.
+- **Decals** (`D`): turn any image (a logo, sticker, warning sign, bullet hole, rivet…) into a decal brush by dropping
+  it on Moonfang with the decal tool active, or via the **Decals** tab of the shelf. It's automatic: a plain background
+  is removed (flood fill from the border, with soft, colour-cleaned edges), empty space is trimmed, and a height map is
+  generated from its shape and brightness, so it gets a raised, bevelled relief. Images with transparency keep it.
+  Click the model to place a decal; drag before releasing to size and rotate it (Shift snaps to 15°). It paints its
+  colours, its relief (adjustable depth) and optionally roughness / metallic, works with mirror symmetry, and can be
+  stamped into a layer mask. Decals live in your library and export / import with it.
 - **Smart masks**: one-click generator presets.
 - **Viewport**:
   - PBR preview with image-based lighting (built-in studio or your own `.hdr`)
@@ -184,7 +191,8 @@ npm run build
 | Alt + Left mouse / Middle mouse | Orbit |
 | Right mouse / Shift + Middle mouse | Pan |
 | Wheel | Zoom |
-| `B` / `E` / `P` | Paint / Erase / Polygon fill |
+| `B` / `E` / `P` / `D` | Paint / Erase / Polygon fill / Decal |
+| Decal: Left mouse | Place the decal; drag to size and rotate it (Shift snaps to 15°) |
 | Polygon fill: Left mouse | Select faces (drag to select more; Ctrl deselects) |
 | Polygon fill: Shift + drag | Box-select the visible faces |
 | Polygon fill: `1` `2` `3` `4` | Select triangles / polygons / UV islands / mesh parts |

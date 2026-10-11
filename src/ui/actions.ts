@@ -311,7 +311,8 @@ export function shortcutsDialog() {
     ['Alt + Left / Middle mouse', 'Orbit'],
     ['Right mouse / Shift + Middle', 'Pan'],
     ['Wheel', 'Zoom'],
-    ['B / E / P', 'Paint / Erase / Polygon fill tool'],
+    ['B / E / P / D', 'Paint / Erase / Polygon fill / Decal tool'],
+    ['Decal: Left mouse', 'Place the decal; drag to size and rotate it (Shift snaps to 15°)'],
     ['Polygon fill: Left mouse', 'Select faces (drag to select more); Ctrl deselects'],
     ['Polygon fill: Shift + drag', 'Box-select the visible faces (Ctrl + Shift deselects)'],
     ['Polygon fill: 1 / 2 / 3 / 4', 'Select triangles / polygons / UV islands / mesh parts'],
@@ -416,12 +417,19 @@ export async function importTextureSetAction(app: App, files?: File[]) {
   }
 }
 
+/** Images → decal brushes (background removal, trimming and height are automatic). */
+export async function importDecalsAction(app: App, files?: File[]) {
+  files ??= await pickFiles(IMAGE_ACCEPT, true);
+  if (!files.length || busyWarning(app)) return;
+  await app.importDecals(await Promise.all(files.map(async (f) => ({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) }))));
+}
+
 export async function importLibraryAction(app: App, file?: File | null) {
   file ??= await pickFile('.mflib,.zip,.json');
   if (!file) return;
   try {
     const r = await app.library.importFile(file.name, new Uint8Array(await file.arrayBuffer()));
-    app.toast(`Imported ${r.materials} material(s) and ${r.smart} smart material(s) from ${file.name}`);
+    app.toast(`Imported ${r.materials} material(s), ${r.smart} smart material(s)${r.decals ? ` and ${r.decals} decal(s)` : ''} from ${file.name}`);
   } catch (e) {
     app.toast(`Could not import library: ${errorMessage(e)}`, 'error');
   }

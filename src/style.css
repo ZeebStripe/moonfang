@@ -1419,3 +1419,70 @@ body:has(.modal-backdrop) .toasts {
   gap: 4px;
   margin-top: 6px;
 }
+
+/* ---------------------------------------------------------------- decals */
+/* A checkerboard behind decals shows their transparency. */
+.decal-img {
+  object-fit: contain;
+  background: repeating-conic-gradient(#3a3b40 0 25%, #2c2d31 0 50%) 0 0 / 12px 12px;
+}
+.tile img.decal-img,
+.lib-thumb img.decal-img {
+  border-radius: 6px;
+}
+.tile.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+}
+.tile .swatch.add {
+  display: grid;
+  place-items: center;
+  border-radius: 6px;
+  border: 1px dashed var(--line);
+  color: var(--text-dim);
+}
+.decal-ghost {
+  position: absolute;
+  display: none;
+  z-index: 4;
+  pointer-events: none;
+  object-fit: contain;
+  transform-origin: 50% 50%;
+  filter: drop-shadow(0 0 1px rgba(0, 0, 0, 0.8));
+}
+#viewport-wrap.decal-tool canvas {
+  cursor: crosshair;
+}
+.decal-picker {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(48px, 1fr));
+  gap: 5px;
+  margin-bottom: 8px;
+}
+.decal-pick {
+  aspect-ratio: 1;
+  padding: 2px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--panel-2);
+  cursor: pointer;
+}
+.decal-pick img {
+  width: 100%;
+  height: 100%;
+  border-radius: 4px;
+}
+.decal-pick.active {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+.decal-pick.add {
+  font-size: 20px;
+  color: var(--text-dim);
+  border-style: dashed;
+}
+.empty-decals {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}

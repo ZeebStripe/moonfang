@@ -1,12 +1,13 @@
 import type { App } from '../app';
 import { MATERIALS, SMART_MASKS, SMART_MATERIALS, type MaterialPreset, type SmartMaterial } from '../data/materials';
 import { renderMaterialThumbnails } from '../engine/thumbnails';
-import { exportLibraryAction, importLibraryAction, importTextureSetAction, saveMaterialDialog, saveSmartMaterialDialog } from './actions';
+import { exportLibraryAction, importDecalsAction, importLibraryAction, importTextureSetAction, saveMaterialDialog, saveSmartMaterialDialog } from './actions';
 import { h, icon } from './dom';
 import { ICONS } from './icons';
-import { customMaterialThumb, itemMenu, libraryManagerDialog, menuItem, popupMenu, sortByGroup } from './libraryUI';
+import { customMaterialThumb, decalUrl, itemMenu, libraryManagerDialog, menuItem, popupMenu, sortByGroup } from './libraryUI';
+import type { Decal } from '../engine/decals';
 
-type ShelfTab = 'materials' | 'smart' | 'masks';
+type ShelfTab = 'materials' | 'smart' | 'masks' | 'decals';
 
 export function mountShelf(app: App, root: HTMLElement) {
   let tab: ShelfTab = 'materials';
@@ -36,6 +37,7 @@ export function mountShelf(app: App, root: HTMLElement) {
         h('div', { class: 'menu-heading' }, 'Import'),
         menuItem('Texture set (images)…', run(() => void importTextureSetAction(app)), 'Select BaseColor / Roughness / Metallic / Height (or ARM) images of one material'),
         menuItem('Library file (.mflib / .json)…', run(() => void importLibraryAction(app))),
+        menuItem('Images as decals…', run(() => void importDecalsAction(app)), 'Logos, stickers, signs, bullet holes…: backgrounds are removed and a height map is made automatically'),
         h('div', { class: 'menu-sep' }),
         h('div', { class: 'menu-heading' }, 'Save'),
         menuItem('Selected fill layer as material…', run(() => saveMaterialDialog(app))),
@@ -52,12 +54,13 @@ export function mountShelf(app: App, root: HTMLElement) {
 
   function renderTabs() {
     const t = (id: ShelfTab, label: string) => h('button', { class: `tab ${tab === id ? 'active' : ''}`, onclick: () => ((tab = id), renderTabs(), renderGrid()) }, label);
-    tabs.replaceChildren(t('materials', 'Materials'), t('smart', 'Smart Materials'), t('masks', 'Smart Masks'));
+    tabs.replaceChildren(t('materials', 'Materials'), t('smart', 'Smart Materials'), t('masks', 'Smart Masks'), t('decals', 'Decals'));
     const faces = app.tool === 'select';
     hint.textContent = {
       materials: faces ? 'Click: assign to the selected faces · + : add as fill layer' : 'Click: use on brush · + : add as fill layer',
       smart: faces ? 'Click: assign to the selected faces' : 'Click: add layers above the selection',
       masks: 'Click: apply to the selected layer’s mask',
+      decals: 'Click: use with the decal tool · right-click for more',
     }[tab];
   }
 
@@ -141,8 +144,26 @@ export function mountShelf(app: App, root: HTMLElement) {
     );
   }
 
+  function decalTile(d: Decal) {
+    const tileEl = tile(
+      d.name,
+      h('img', { class: 'decal-img', src: decalUrl(app, d) ?? '', alt: '', draggable: false }),
+      () => {
+        app.decal.id = d.id;
+        app.setTool('decal');
+        app.emit('brush');
+        renderGrid();
+      },
+      [],
+      `${d.name} · click to place it on the model, right-click for more`,
+      (e) => itemMenu(app, d, e),
+    );
+    tileEl.classList.toggle('active', app.decal.id === d.id);
+    return tileEl;
+  }
+
   /** The user's items under "My …" headings, one per category. */
-  function grouped<T extends MaterialPreset | SmartMaterial>(items: T[], title: string, make: (x: T) => HTMLElement): HTMLElement[] {
+  function grouped<T extends MaterialPreset | SmartMaterial | Decal>(items: T[], title: string, make: (x: T) => HTMLElement): HTMLElement[] {
     const out: HTMLElement[] = [];
     let last: string | undefined | null = null;
     for (const x of sortByGroup(items)) {
@@ -172,6 +193,10 @@ export function mountShelf(app: App, root: HTMLElement) {
         ...(custom.length ? [h('div', { class: 'shelf-group' }, 'Built-in')] : []),
         ...builtin.map(smartTile),
       );
+    } else if (tab === 'decals') {
+      const decals = app.library.decals.filter((d) => match(d.name) || match(d.group ?? ''));
+      const add = tile('Import images…', h('div', { class: 'swatch add' }, icon(ICONS.plus)), () => void importDecalsAction(app), [], 'Make decals from images (PNG, JPG, WebP). Plain backgrounds are removed automatically; you can also drop images here while the decal tool is active.');
+      grid.replaceChildren(...grouped(decals, 'My decals', decalTile), add);
     } else {
       grid.replaceChildren(
         ...SMART_MASKS.filter((s) => match(s.name)).map((s) =>
@@ -196,7 +221,11 @@ export function mountShelf(app: App, root: HTMLElement) {
   app.textures.onLoad(later);
   app.smartPreviews.onUpdate(() => tab === 'smart' && later());
 
-  app.on((k) => k === 'tool' && renderTabs());
+  app.on((k) => {
+    if (k === 'tool') renderTabs();
+    // The decal tab marks the decal in use.
+    if ((k === 'tool' || k === 'brush') && tab === 'decals') later();
+  });
   renderTabs();
   // Thumbnails need the environment map, which exists once the viewport is constructed.
   requestAnimationFrame(renderGrid);

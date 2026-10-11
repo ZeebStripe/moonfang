@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import type { MaterialPreset, SmartMaterial } from '../data/materials';
+import type { Decal } from './decals';
 import { MAP_KEYS, type MaterialMaps } from './layers';
 
 /** Raw image file used by material maps. Ids are content hashes, so identical images are shared. */
@@ -264,6 +265,7 @@ interface LibraryJson {
   materials: MaterialPreset[];
   smartMaterials: SmartMaterial[];
   tips?: { id: string; name: string; assetId: string }[];
+  decals?: Decal[];
   textures?: { id: string; name: string; mime: string; path: string }[];
 }
 
@@ -273,6 +275,8 @@ export class Library {
   smart: SmartMaterial[] = [];
   /** imported brush tips (normalised greyscale PNG assets) */
   tips: { id: string; name: string; assetId: string }[] = [];
+  /** decal brushes made from imported images */
+  decals: Decal[] = [];
   private listeners = new Set<() => void>();
   /** Saves run one after another: an older save would otherwise delete images a newer one just stored. */
   private saving: Promise<void> = Promise.resolve();
@@ -290,11 +294,12 @@ export class Library {
 
   async load() {
     try {
-      const data = (await idbGet('library')) as Pick<LibraryJson, 'materials' | 'smartMaterials' | 'tips'> | undefined;
+      const data = (await idbGet('library')) as Pick<LibraryJson, 'materials' | 'smartMaterials' | 'tips' | 'decals'> | undefined;
       if (!data) return;
       this.materials = data.materials ?? [];
       this.smart = data.smartMaterials ?? [];
       this.tips = data.tips ?? [];
+      this.decals = data.decals ?? [];
       for (const id of this.textureIds()) {
         const a = (await idbGet(`tex:${id}`)) as TextureAsset | undefined;
         if (a) void this.store.add(a);
@@ -310,6 +315,7 @@ export class Library {
     for (const m of this.materials) mapTextureIds(m.maps).forEach((id) => ids.add(id));
     for (const s of this.smart) for (const l of s.layers) mapTextureIds(l.maps).forEach((id) => ids.add(id));
     for (const t of this.tips) ids.add(t.assetId);
+    for (const d of this.decals) ids.add(d.maskId).add(d.surfaceId);
     return ids;
   }
 
@@ -323,7 +329,7 @@ export class Library {
       for (const key of await idbKeys()) {
         if (key.startsWith('tex:') && !ids.has(key.slice(4))) await idbDel(key);
       }
-      await idbPut('library', { materials: this.materials, smartMaterials: this.smart, tips: this.tips });
+      await idbPut('library', { materials: this.materials, smartMaterials: this.smart, tips: this.tips, decals: this.decals });
     } catch (e) {
       console.warn('Could not save material library', e);
     }
@@ -339,6 +345,11 @@ export class Library {
     this.changed();
   }
 
+  addDecal(d: Decal) {
+    this.decals = [...this.decals.filter((x) => x.id !== d.id), d];
+    this.changed();
+  }
+
   addTip(tip: { id: string; name: string; assetId: string }) {
     this.tips = [...this.tips.filter((t) => t.id !== tip.id), tip];
     this.changed();
@@ -350,6 +361,7 @@ export class Library {
       x.id !== id ? x : { ...x, ...(patch.name !== undefined && { name: patch.name.trim() || x.name }), ...(patch.group !== undefined && { group: patch.group.trim() || undefined }) };
     this.materials = this.materials.map(apply);
     this.smart = this.smart.map(apply);
+    this.decals = this.decals.map(apply);
     this.changed();
   }
 
@@ -371,16 +383,18 @@ export class Library {
     this.materials = this.materials.filter((m) => m.id !== id);
     this.smart = this.smart.filter((s) => s.id !== id);
     this.tips = this.tips.filter((t) => t.id !== id);
+    this.decals = this.decals.filter((d) => d.id !== id);
     this.changed();
   }
 
   /** Exports the whole user library (or a subset) as a zip with images. */
-  exportFile(materials = this.materials, smart = this.smart): Uint8Array {
+  exportFile(materials = this.materials, smart = this.smart, decals = this.decals): Uint8Array {
     const files: Record<string, Uint8Array> = {};
     const textures: NonNullable<LibraryJson['textures']> = [];
     const ids = new Set<string>();
     for (const m of materials) mapTextureIds(m.maps).forEach((i) => ids.add(i));
     for (const s of smart) for (const l of s.layers) mapTextureIds(l.maps).forEach((i) => ids.add(i));
+    for (const d of decals) ids.add(d.maskId).add(d.surfaceId);
     for (const id of ids) {
       const a = this.store.asset(id);
       if (!a) continue;
@@ -388,13 +402,13 @@ export class Library {
       files[path] = a.bytes;
       textures.push({ id, name: a.name, mime: a.mime, path });
     }
-    const json: LibraryJson = { format: LIB_FORMAT, version: 1, materials, smartMaterials: smart, textures };
+    const json: LibraryJson = { format: LIB_FORMAT, version: 1, materials, smartMaterials: smart, decals, textures };
     files['library.json'] = strToU8(JSON.stringify(json, null, 1));
     return zipSync(files, { level: 0 });
   }
 
   /** Imports a .mflib/.zip (with textures) or a plain library .json. Returns counts. */
-  async importFile(name: string, bytes: Uint8Array): Promise<{ materials: number; smart: number }> {
+  async importFile(name: string, bytes: Uint8Array): Promise<{ materials: number; smart: number; decals: number }> {
     let json: LibraryJson;
     let files: Record<string, Uint8Array> = {};
     if (/\.json$/i.test(name)) json = JSON.parse(strFromU8(bytes));
@@ -410,12 +424,15 @@ export class Library {
     }
     const mats = (json.materials ?? []).map((m) => ({ ...m, category: 'Custom' as const, custom: true }));
     const smart = (json.smartMaterials ?? []).map((s) => ({ ...s, custom: true }));
+    const decals = (json.decals ?? []).filter((d) => this.store.asset(d.maskId) && this.store.asset(d.surfaceId));
     const mIds = new Set(mats.map((m) => m.id));
     const sIds = new Set(smart.map((s) => s.id));
+    const dIds = new Set(decals.map((d) => d.id));
     this.materials = [...this.materials.filter((m) => !mIds.has(m.id)), ...mats];
     this.smart = [...this.smart.filter((s) => !sIds.has(s.id)), ...smart];
+    this.decals = [...this.decals.filter((d) => !dIds.has(d.id)), ...decals];
     this.changed();
-    return { materials: mats.length, smart: smart.length };
+    return { materials: mats.length, smart: smart.length, decals: decals.length };
   }
 }
 

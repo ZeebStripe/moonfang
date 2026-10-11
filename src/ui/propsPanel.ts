@@ -1,7 +1,8 @@
 import type { App } from '../app';
 import { BLEND_MODES, GEN_LABELS, GEN_TYPES, MAP_KEYS, defaultGenerator, hasMaps, type ChannelKey, type FillLayer, type Layer, type MaterialMaps, type MaterialValues, type ChannelSet } from '../engine/layers';
 import type { TextureStore } from '../engine/library';
-import { displaySettings, saveMaterialDialog, saveSmartMaterialDialog } from './actions';
+import { displaySettings, importDecalsAction, saveMaterialDialog, saveSmartMaterialDialog } from './actions';
+import { decalUrl } from './libraryUI';
 import { checkbox, colorField, h, iconButton, section, selectField, slider } from './dom';
 import { ICONS } from './icons';
 import { brushTipControls, stencilControls } from './brushUI';
@@ -191,6 +192,51 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
       h('div', { class: 'dim small' }, 'Or click a material or smart material in the shelf to assign it.'),
       h('div', { class: 'face-head' }, 'Selected layer'),
       ...layerActions,
+    );
+  }
+
+  /** Decal tool: which decal, how deep its relief goes, and which channels it paints. */
+  function decalSection(): HTMLElement {
+    const d = app.decal;
+    const b = app.brush;
+    const decals = app.library.decals;
+    const picker = h(
+      'div',
+      { class: 'decal-picker' },
+      ...decals.map((x) =>
+        h(
+          'button',
+          { class: `decal-pick ${x.id === d.id ? 'active' : ''}`, title: x.name, onclick: () => ((d.id = x.id), app.emit('brush')) },
+          h('img', { class: 'decal-img', src: decalUrl(app, x) ?? '', alt: x.name, draggable: false }),
+        ),
+      ),
+      h('button', { class: 'decal-pick add', title: 'Import images as decals', onclick: () => void importDecalsAction(app) }, '+'),
+    );
+    const maskMode = app.part === 'mask' && !!app.selected?.mask;
+    return section(
+      `Decal${maskMode ? ' · into mask' : ''}`,
+      decals.length
+        ? picker
+        : h('div', { class: 'empty-decals' }, h('div', { class: 'dim small' }, 'No decals yet. Import images (logos, stickers, signs, bullet holes…): plain backgrounds are removed and a height map is made automatically.'), picker),
+      h('div', { class: 'dim small' }, 'Click the model to place it; drag before releasing to size and rotate it (Shift snaps). Mirror symmetry applies.'),
+      slider('Default size', { value: b.size, min: 4, max: 400, step: 1, onInput: (v) => ((b.size = v), app.emit('tool')), title: 'Size when you click without dragging' }),
+      slider('Default angle', { value: b.angle, min: -180, max: 180, step: 1, onInput: (v) => (b.angle = v), title: 'Rotation when you click without dragging' }),
+      slider('Opacity', { value: b.opacity, min: 0, max: 1, onInput: (v) => (b.opacity = v) }),
+      maskMode
+        ? h('div', { class: 'dim small' }, 'Painting the layer mask: the decal’s shape is stamped with the mask value.')
+        : [
+            h(
+              'div',
+              { class: 'row wrap' },
+              checkbox('Color', d.channels.color, (v) => (d.channels.color = v)),
+              checkbox('Height', d.channels.height, (v) => ((d.channels.height = v), render())),
+              checkbox('Roughness', d.channels.roughness, (v) => ((d.channels.roughness = v), render())),
+              checkbox('Metallic', d.channels.metallic, (v) => ((d.channels.metallic = v), render())),
+            ),
+            d.channels.height ? slider('Depth', { value: d.depth, min: 0, max: 0.5, onInput: (v) => (d.depth = v), title: 'How far the decal’s automatic relief raises the surface' }) : null,
+            d.channels.roughness ? slider('Roughness', { value: b.values.roughness, min: 0, max: 1, onInput: (v) => (b.values.roughness = v) }) : null,
+            d.channels.metallic ? slider('Metallic', { value: b.values.metallic, min: 0, max: 1, onInput: (v) => (b.values.metallic = v) }) : null,
+          ],
     );
   }
 
@@ -448,7 +494,7 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
       return;
     }
     const l = app.selected;
-    body.replaceChildren(app.tool === 'select' ? faceSection() : brushSection(), ...(l ? [layerSection(l), maskSection(l)] : [h('div', { class: 'empty' }, 'No layer selected.')]));
+    body.replaceChildren(app.tool === 'select' ? faceSection() : app.tool === 'decal' ? decalSection() : brushSection(), ...(l ? [layerSection(l), maskSection(l)] : [h('div', { class: 'empty' }, 'No layer selected.')]));
     body.scrollTop = scroll;
   }
 

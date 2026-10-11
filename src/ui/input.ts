@@ -2,6 +2,7 @@ import type { App } from '../app';
 import type { Stamp } from '../engine/painter';
 import { VIEW_MODES } from '../engine/viewport';
 import { FACE_MODES } from '../engine/faceSelect';
+import { decalUrl } from './libraryUI';
 import { exportDialog, openMeshDialog, saveProjectAction } from './actions';
 import { saveVersionDialog } from './saves';
 import { h } from './dom';
@@ -122,7 +123,7 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
   });
 
   function updateCursor(e?: PointerEvent) {
-    const show = hover && !altDown && !!app.mesh && !resize && app.tool !== 'select';
+    const show = hover && !altDown && !!app.mesh && !resize && app.tool !== 'select' && app.tool !== 'decal';
     cursor.style.display = show ? 'block' : 'none';
     if (!e) return;
     const r = wrap.getBoundingClientRect();
@@ -260,13 +261,87 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
     // The overlay is rebuilt for the new tool / view / set; the hover comes back on the next move.
     if (k === 'tool' || k === 'view' || k === 'set' || k === 'mesh' || k === 'faces') hoverTri = -1;
     if (k === 'tool') wrap.classList.toggle('face-select', app.tool === 'select');
+    if (k === 'tool') wrap.classList.toggle('decal-tool', app.tool === 'decal');
   });
+
+  // ------------------------------------------------------------------ decals: click to place, drag to size / rotate
+  // The decal follows the cursor at the brush size and angle; pressing anchors it, dragging away from the anchor
+  // scales it (distance = radius) and turns it (direction), and releasing places it.
+  const ghost = h('img', { class: 'decal-ghost', alt: '', draggable: false }) as HTMLImageElement;
+  wrap.append(ghost);
+  let placing: { id: number; cx: number; cy: number; r: number; rot: number; dragged: boolean } | null = null;
+  const ghostAt = (cx: number, cy: number, r: number, rot: number, active: boolean) => {
+    const d = app.library.decals.find((x) => x.id === app.decal.id);
+    const src = d ? decalUrl(app, d) : null;
+    if (!src || !app.mesh || app.tool !== 'decal') {
+      ghost.style.display = 'none';
+      return;
+    }
+    if (ghost.getAttribute('src') !== src) ghost.src = src;
+    const wr = wrap.getBoundingClientRect();
+    // rot is counter-clockwise (screen y up); CSS rotates clockwise.
+    Object.assign(ghost.style, {
+      display: 'block',
+      width: `${2 * r}px`,
+      height: `${2 * r}px`,
+      left: `${cx - wr.left - r}px`,
+      top: `${cy - wr.top - r}px`,
+      transform: `rotate(${-rot}rad)`,
+      opacity: active ? '0.85' : '0.45',
+    });
+  };
+  const defaultRot = () => (app.brush.angle * Math.PI) / 180;
+  wrap.addEventListener(
+    'pointerdown',
+    (e) => {
+      if (app.tool !== 'decal' || e.button !== 0 || e.altKey || stencilKey || placing || e.target !== canvas || !app.mesh) return;
+      e.stopPropagation();
+      e.preventDefault();
+      placing = { id: e.pointerId, cx: e.clientX, cy: e.clientY, r: app.brush.size, rot: defaultRot(), dragged: false };
+      canvas.setPointerCapture(e.pointerId);
+      ghostAt(e.clientX, e.clientY, placing.r, placing.rot, true);
+    },
+    true,
+  );
+  canvas.addEventListener('pointermove', (e) => {
+    if (app.tool !== 'decal') return;
+    if (!placing) {
+      if (!e.buttons) ghostAt(e.clientX, e.clientY, app.brush.size, defaultRot(), false);
+      return;
+    }
+    if (e.pointerId !== placing.id) return;
+    const dx = e.clientX - placing.cx;
+    const dy = e.clientY - placing.cy;
+    if (!placing.dragged && Math.hypot(dx, dy) > 6) placing.dragged = true;
+    if (placing.dragged) {
+      placing.r = Math.max(4, Math.hypot(dx, dy));
+      let rot = Math.atan2(-dy, dx); // dragging right = upright
+      if (e.shiftKey) rot = Math.round(rot / (Math.PI / 12)) * (Math.PI / 12);
+      placing.rot = rot;
+    }
+    ghostAt(placing.cx, placing.cy, placing.r, placing.rot, true);
+  });
+  const endPlace = (e: PointerEvent) => {
+    if (!placing || e.pointerId !== placing.id) return;
+    const p = placing;
+    placing = null;
+    if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+    if (e.type === 'pointercancel') return;
+    const r = canvas.getBoundingClientRect();
+    const k = dpr();
+    app.placeDecal((p.cx - r.left) * k, (r.height - (p.cy - r.top)) * k, p.r * k, p.rot);
+    ghostAt(e.clientX, e.clientY, app.brush.size, defaultRot(), false);
+  };
+  canvas.addEventListener('pointerup', endPlace);
+  canvas.addEventListener('pointercancel', endPlace);
+  canvas.addEventListener('pointerleave', () => !placing && (ghost.style.display = 'none'));
+  app.on((k) => (k === 'tool' || k === 'brush' || k === 'view') && !placing && app.tool !== 'decal' && (ghost.style.display = 'none'));
 
   // Capture phase so a painting click never reaches OrbitControls.
   wrap.addEventListener(
     'pointerdown',
     (e) => {
-      if (e.button !== 0 || e.altKey || painting || stencilKey || app.tool === 'select') return;
+      if (e.button !== 0 || e.altKey || painting || stencilKey || app.tool === 'select' || app.tool === 'decal') return;
       if (e.target !== canvas) return;
       e.stopPropagation();
       e.preventDefault();
@@ -371,6 +446,9 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
             break;
           case 'p':
             app.setTool('select');
+            break;
+          case 'd':
+            app.setTool('decal');
             break;
           case 'escape':
             if (app.tool !== 'select') return;

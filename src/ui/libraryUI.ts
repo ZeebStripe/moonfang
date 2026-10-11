@@ -1,13 +1,29 @@
 import type { App } from '../app';
 import type { MaterialPreset, SmartMaterial } from '../data/materials';
+import type { Decal } from '../engine/decals';
 import { downloadBlob } from '../engine/exporter';
 import { renderMaterialThumbnails } from '../engine/thumbnails';
 import { importLibraryAction, openModal, safeName } from './actions';
 import { h } from './dom';
 
-/** A material or smart material in the shelf: built-in, or the user's own (`custom`). */
-export type LibraryItem = MaterialPreset | SmartMaterial;
+/** A material or smart material in the shelf (built-in, or the user's own: `custom`), or one of the user's decals. */
+export type LibraryItem = MaterialPreset | SmartMaterial | Decal;
 const isSmart = (x: LibraryItem): x is SmartMaterial => 'layers' in x;
+const isDecal = (x: LibraryItem): x is Decal => 'maskId' in x;
+const isOwn = (x: LibraryItem) => isDecal(x) || !!x.custom;
+
+const decalUrls = new Map<string, string>();
+
+/** Preview image of a decal (its colour + transparency image). */
+export function decalUrl(app: App, d: Decal): string | null {
+  let url = decalUrls.get(d.maskId);
+  const asset = app.textures.asset(d.maskId);
+  if (!url && asset) {
+    url = URL.createObjectURL(new Blob([asset.bytes as BlobPart], { type: asset.mime }));
+    decalUrls.set(d.maskId, url);
+  }
+  return url ?? null;
+}
 
 // ------------------------------------------------------------------------------------------- previews
 
@@ -34,6 +50,7 @@ export function customMaterialThumb(app: App, m: MaterialPreset): string | null 
 
 /** Small preview element for any library item (smart material previews fill in once rendered). */
 function itemPreview(app: App, item: LibraryItem): HTMLElement {
+  if (isDecal(item)) return h('img', { class: 'decal-img', src: decalUrl(app, item) ?? '', alt: '', draggable: false });
   const url = isSmart(item) ? app.smartPreviews.get(item) : item.custom ? customMaterialThumb(app, item) : null;
   if (url) return h('img', { src: url, alt: '', draggable: false });
   const bg = isSmart(item) ? item.preview : `rgb(${item.values.color.map((v) => Math.round(v * 255)).join(',')})`;
@@ -45,14 +62,15 @@ function itemPreview(app: App, item: LibraryItem): HTMLElement {
 /** Downloads the given items (with their texture images) as one .mflib file. */
 export function exportItems(app: App, items: LibraryItem[], fileName?: string) {
   if (!items.length) return app.toast('Nothing selected to export.', 'warn');
-  const mats = items.filter((x): x is MaterialPreset => !isSmart(x));
+  const mats = items.filter((x): x is MaterialPreset => !isSmart(x) && !isDecal(x));
   const smart = items.filter(isSmart);
+  const decals = items.filter(isDecal);
   const name = fileName ?? (items.length === 1 ? safeName(items[0].name) : 'my_materials');
-  downloadBlob(app.library.exportFile(mats, smart) as BlobPart, `${name}.mflib`, 'application/zip');
+  downloadBlob(app.library.exportFile(mats, smart, decals) as BlobPart, `${name}.mflib`, 'application/zip');
   app.toast(`Exported ${items.length === 1 ? `"${items[0].name}"` : `${items.length} items`} — share the .mflib file; it can be imported with Library ▾ → Import or dropped onto Moonfang.`);
 }
 
-export function duplicateItem(app: App, item: LibraryItem) {
+export function duplicateItem(app: App, item: MaterialPreset | SmartMaterial) {
   const copy = app.library.duplicate(item);
   app.toast(
     item.custom
@@ -66,7 +84,7 @@ export function renameDialog(app: App, item: LibraryItem) {
   const group = h('input', { type: 'text', value: item.group ?? '', placeholder: 'e.g. Wood, Sci-fi, Project X', maxLength: 40, list: 'lib-groups' }) as HTMLInputElement;
   const go = h('button', { class: 'btn primary' }, 'Save');
   const close = openModal(
-    isSmart(item) ? 'Smart Material' : 'Material',
+    isDecal(item) ? 'Decal' : isSmart(item) ? 'Smart Material' : 'Material',
     h('div', { class: 'form' }, h('div', { class: 'field' }, h('label', {}, 'Name'), name), h('div', { class: 'field' }, h('label', {}, 'Category'), group), groupList(app)),
     [go],
   );
@@ -90,7 +108,7 @@ function deleteItems(app: App, items: LibraryItem[]): boolean {
 
 /** Category suggestions: the categories already used in the library. */
 function groupList(app: App): HTMLElement {
-  const groups = [...new Set([...app.library.materials, ...app.library.smart].map((x) => x.group).filter(Boolean))] as string[];
+  const groups = [...new Set([...app.library.materials, ...app.library.smart, ...app.library.decals].map((x) => x.group).filter(Boolean))] as string[];
   return h('datalist', { id: 'lib-groups' }, ...groups.sort().map((g) => h('option', { value: g })));
 }
 
@@ -124,19 +142,19 @@ export const menuItem = (label: string, fn: () => void, title?: string, cls = ''
 export function itemMenu(app: App, item: LibraryItem, e: MouseEvent) {
   e.preventDefault();
   const run = (fn: () => void) => () => (close(), fn());
-  const content = item.custom
+  const content = isOwn(item)
     ? [
         menuItem('Rename / category…', run(() => renameDialog(app, item))),
-        menuItem('Duplicate', run(() => duplicateItem(app, item))),
+        isDecal(item) ? null : menuItem('Duplicate', run(() => duplicateItem(app, item))),
         menuItem('Export (.mflib)…', run(() => exportItems(app, [item])), 'Save it as a file to share or back up'),
         h('div', { class: 'menu-sep' }),
         menuItem('Delete', run(() => deleteItems(app, [item])), undefined, 'danger'),
       ]
     : [
         h('div', { class: 'menu-heading' }, 'Built-in'),
-        menuItem('Make an editable copy', run(() => duplicateItem(app, item)), 'Adds a copy to your library that you can change and update'),
+        menuItem('Make an editable copy', run(() => duplicateItem(app, item as MaterialPreset | SmartMaterial)), 'Adds a copy to your library that you can change and update'),
       ];
-  const close = popupMenu(content, { left: e.clientX, top: e.clientY });
+  const close = popupMenu(content.filter((x) => !!x) as HTMLElement[], { left: e.clientX, top: e.clientY });
 }
 
 // ------------------------------------------------------------------------------------------- manager
@@ -152,7 +170,7 @@ export function libraryManagerDialog(app: App) {
   openModal('My Library', body, [count, importBtn, deleteSel, exportSel]);
   body.closest('.modal')?.classList.add('wide');
 
-  const all = (): LibraryItem[] => [...app.library.materials, ...app.library.smart];
+  const all = (): LibraryItem[] => [...app.library.materials, ...app.library.smart, ...app.library.decals];
   const selected = () => all().filter((x) => picked.has(x.id));
   exportSel.addEventListener('click', () => exportItems(app, selected()));
   deleteSel.addEventListener('click', () => deleteItems(app, selected()) && picked.clear());
@@ -165,14 +183,14 @@ export function libraryManagerDialog(app: App) {
     name.addEventListener('change', () => app.library.update(item.id, { name: name.value }));
     const group = h('input', { type: 'text', value: item.group ?? '', placeholder: 'Category', maxLength: 40, list: 'lib-groups', title: 'Category (groups it on the shelf)' }) as HTMLInputElement;
     group.addEventListener('change', () => app.library.update(item.id, { group: group.value }));
-    const info = isSmart(item) ? `${item.layers.length} layer${item.layers.length === 1 ? '' : 's'}` : item.maps ? 'textured' : '';
+    const info = isDecal(item) ? 'decal' : isSmart(item) ? `${item.layers.length} layer${item.layers.length === 1 ? '' : 's'}` : item.maps ? 'textured' : '';
     return h(
       'div',
       { class: 'lib-row' },
       check,
       h('div', { class: 'lib-thumb' }, itemPreview(app, item)),
       h('div', { class: 'lib-fields' }, name, h('div', { class: 'lib-sub' }, group, h('span', { class: 'dim small' }, info))),
-      h('button', { class: 'btn small', title: 'Add a copy', onclick: () => duplicateItem(app, item) }, 'Duplicate'),
+      isDecal(item) ? h('span', { class: 'lib-spacer' }) : h('button', { class: 'btn small', title: 'Add a copy', onclick: () => duplicateItem(app, item) }, 'Duplicate'),
       h('button', { class: 'btn small', title: 'Save this item as a .mflib file to share', onclick: () => exportItems(app, [item]) }, 'Export'),
       h('button', { class: 'btn small', title: 'Delete', onclick: () => deleteItems(app, [item]) && picked.delete(item.id) }, 'Delete'),
     );
@@ -211,10 +229,11 @@ export function libraryManagerDialog(app: App) {
     // Keep the scroll position and the focused field across re-renders.
     const scroll = body.scrollTop;
     body.replaceChildren(
-      h('p', { class: 'dim small' }, 'Your own materials and smart materials. Edit one by adding it to a layer, changing it there, and pressing Update in the layer’s properties. Right-click a built-in in the shelf to make an editable copy.'),
+      h('p', { class: 'dim small' }, 'Your own materials, smart materials and decals. Edit a material by adding it to a layer, changing it there, and pressing Update in the layer’s properties. Right-click a built-in in the shelf to make an editable copy.'),
       groupList(app),
       ...section('Materials', app.library.materials, 'None yet. Save a fill layer as a material, import a texture set, or copy a built-in.'),
       ...section('Smart Materials', app.library.smart, 'None yet. Save a folder of fill layers as a smart material, or copy a built-in.'),
+      ...section('Decals', app.library.decals, 'None yet. Import images in the Decals tab of the shelf.'),
     );
     body.scrollTop = scroll;
     sync();
