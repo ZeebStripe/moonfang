@@ -59,8 +59,13 @@ It runs in the browser (WebGL2) and is built with TypeScript and three.js.
 
 ## Getting started
 
-On Windows, double-click **`start.bat`** to start Open Painter and open it in your browser; it installs the
-dependencies on first run. **`stop.bat`** stops it. Or manually:
+On Windows, double-click **`create-shortcut.bat`** once. It adds an **Open Painter** shortcut to the desktop and
+the Start menu that opens the app in its own window (Edge or Chrome app mode, no tabs or address bar) and stops
+the server again when you close that window. The app window uses its own browser profile, so its autosave is
+separate from a normal browser tab's.
+
+Alternatively, **`start.bat`** starts Open Painter and opens it in your browser (it installs the dependencies on
+first run), and **`stop.bat`** stops it. Or manually:
 
 ```bash
 npm install

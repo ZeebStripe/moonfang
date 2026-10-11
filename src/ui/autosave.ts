@@ -51,6 +51,10 @@ export async function setupAutosave(app: App): Promise<boolean> {
   app.on((k) => k === 'mesh' && (saved = app.revision));
   setInterval(() => void save('timer'), INTERVAL_MS);
   document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && void save('hidden'));
+  // Closing the window with changes newer than the last autosave: let the browser ask first.
+  window.addEventListener('beforeunload', (e) => {
+    if (app.mesh && app.revision !== saved) e.preventDefault();
+  });
   return restored;
 }
 
