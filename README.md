@@ -60,8 +60,9 @@ It runs in the browser (WebGL2) and is built with TypeScript and three.js.
 ## Getting started
 
 On Windows, double-click **`create-shortcut.bat`** once. It adds a **Moonfang** shortcut to the desktop and
-the Start menu that opens the app in its own window (Edge or Chrome app mode, no tabs or address bar) and stops
-the server again when you close that window. The app window uses its own browser profile, so its autosave is
+the Start menu that opens the app in its own window of your default browser, without tabs or address bar (app
+mode in Edge, Chrome, Brave or Vivaldi; a separate profile with the toolbars hidden in Firefox), and stops the
+server again when you close that window. The app window uses its own browser profile, so its autosave is
 separate from a normal browser tab's.
 
 Alternatively, **`start.bat`** starts Moonfang and opens it in your browser (it installs the dependencies on
