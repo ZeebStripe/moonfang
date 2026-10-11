@@ -1,5 +1,5 @@
 import type { App } from '../app';
-import { downloadBlob, EXPORT_PRESETS } from '../engine/exporter';
+import { downloadBlob, EXPORT_FORMATS, EXPORT_PRESETS, type ExportFormat } from '../engine/exporter';
 import { walkLayers } from '../engine/layers';
 import { loadDemoMesh, loadMeshFile, type DemoMeshId } from '../engine/meshLoader';
 import { checkbox, h, pickFile, pickFiles, selectField, slider } from './dom';
@@ -99,12 +99,17 @@ export function exportDialog(app: App) {
   let preset = EXPORT_PRESETS[1];
   let normal: 'opengl' | 'directx' = preset.normal;
   let baseName = safeName(app.mesh.name);
+  let format: ExportFormat = 'png8';
   const normalSel = h('div');
+  const info = h('div', { class: 'dim small' });
   const mapsList = h('ul', { class: 'export-maps' });
   const refresh = () => {
     normalSel.replaceChildren(
       selectField('Normal map', [['opengl', 'OpenGL (Y+)'], ['directx', 'DirectX (Y−)']] as const, normal, (v) => (normal = v)),
     );
+    const ext = format === 'exr' ? 'exr' : 'png';
+    const sizes = app.sets.map((s) => `${app.sets.length > 1 ? `${s.info.name}: ` : ''}${s.texSize}×${s.texSize}`).join(' · ');
+    info.textContent = `${sizes} — ${EXPORT_FORMATS.find((f) => f[0] === format)![1]}, UV padding applied.`;
     const prefixes = app.sets.length > 1 ? app.sets.map((s) => `${baseName}_${safeName(s.info.name)}`) : [baseName];
     mapsList.replaceChildren(
       ...prefixes.flatMap((pre) =>
@@ -112,11 +117,15 @@ export function exportDialog(app: App) {
           h(
             'li',
             {},
-            `${pre}_${m.suffix}.png`,
+            `${pre}_${m.suffix}.${ext}`,
             h(
               'span',
               { class: 'dim' },
-              m.optional === 'map'
+              format === 'exr'
+                ? m.optional === 'map'
+                  ? ' · RGBA, only if used'
+                  : ' · RGBA'
+                : m.optional === 'map'
                 ? ' · RGB, only if used'
                 : m.optional === 'alpha'
                   ? ' · RGB (+ opacity alpha if used)'
@@ -138,20 +147,17 @@ export function exportDialog(app: App) {
     }),
     h('div', { class: 'field' }, h('label', {}, 'File prefix'), nameInput),
     normalSel,
-    h(
-      'div',
-      { class: 'dim small' },
-      `${app.sets.map((s) => `${app.sets.length > 1 ? `${s.info.name}: ` : ''}${s.texSize}×${s.texSize}`).join(' · ')} — 8-bit PNG, UV padding applied.`,
-    ),
+    selectField('Format', EXPORT_FORMATS, format, (v) => ((format = v), refresh())),
+    info,
     mapsList,
   );
   refresh();
   const doTextures = h('button', { class: 'btn primary' }, 'Export Textures (.zip)');
   const doGlb = h('button', { class: 'btn' }, 'Export Textured GLB');
   const close = openModal('Export', body, [doGlb, doTextures]);
-  doTextures.addEventListener('click', () => {
+  doTextures.addEventListener('click', async () => {
     try {
-      const zip = app.exporter.exportTextures(exportSets(app), app.mesh!, { preset, normal, baseName });
+      const zip = await app.exporter.exportTextures(exportSets(app), app.mesh!, { preset, normal, baseName, format });
       downloadBlob(zip as BlobPart, `${baseName}_textures.zip`, 'application/zip');
       app.toast('Textures exported');
       close();

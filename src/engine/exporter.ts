@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { zipSync, zlibSync } from 'fflate';
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
+import { EXRExporter, ZIP_COMPRESSION } from 'three/examples/jsm/exporters/EXRExporter.js';
 import { createRT, FullscreenPass, GLSL_NOISE, rawMaterial } from './gl';
 import type { PaintMesh } from './meshLoader';
 
@@ -87,6 +88,7 @@ uniform sampler2D uNormal;
 uniform sampler2D uEmissive;
 uniform ivec4 uSrc;
 uniform int uFlipGreen;
+uniform int uLinear;   // 1: keep color maps linear (EXR convention)
 ${GLSL_NOISE}
 vec3 em;
 float alpha;
@@ -111,9 +113,10 @@ float pick(int s, vec3 base, vec4 orm, vec3 n) {
 }
 void main() {
   vec4 b4 = texture(uBase, vUv);
-  vec3 base = linearToSrgb(b4.rgb);
+  vec3 base = uLinear == 1 ? b4.rgb : linearToSrgb(b4.rgb);
   alpha = b4.a;
-  em = linearToSrgb(texture(uEmissive, vUv).rgb);
+  vec3 e = texture(uEmissive, vUv).rgb;
+  em = uLinear == 1 ? e : linearToSrgb(e);
   vec4 orm = texture(uOrm, vUv);
   vec3 n = texture(uNormal, vUv).rgb;
   o0 = vec4(pick(uSrc.x, base, orm, n), pick(uSrc.y, base, orm, n), pick(uSrc.z, base, orm, n), pick(uSrc.w, base, orm, n));
@@ -127,10 +130,19 @@ export interface ExportSet {
 
 const fileSafe = (s: string) => s.replace(/[^\w\-]+/g, '_').replace(/^_+|_+$/g, '') || 'set';
 
+export type ExportFormat = 'png8' | 'png16' | 'exr';
+export const EXPORT_FORMATS: [ExportFormat, string][] = [
+  ['png8', 'PNG 8-bit'],
+  ['png16', 'PNG 16-bit'],
+  ['exr', 'OpenEXR (half float, linear color)'],
+];
+
 export interface ExportOptions {
   preset: ExportPreset;
   normal: 'opengl' | 'directx';
   baseName: string;
+  /** default 'png8' */
+  format?: ExportFormat;
 }
 
 export class Exporter {
@@ -141,6 +153,7 @@ export class Exporter {
     uEmissive: { value: null },
     uSrc: { value: new THREE.Vector4() },
     uFlipGreen: { value: 0 },
+    uLinear: { value: 0 },
   });
 
   constructor(
@@ -152,9 +165,11 @@ export class Exporter {
    * Renders one export map to RGBA8 and returns rows in GL order (row 0 = v 0).
    * `flipGreen` inverts the normal Y channel.
    */
-  private renderMap(final: THREE.WebGLRenderTarget, map: ExportMap, flipGreen: boolean): Uint8Array {
+  private renderMap(final: THREE.WebGLRenderTarget, map: ExportMap, flipGreen: boolean): Uint8Array;
+  private renderMap(final: THREE.WebGLRenderTarget, map: ExportMap, flipGreen: boolean, float: true, linear: boolean): Float32Array;
+  private renderMap(final: THREE.WebGLRenderTarget, map: ExportMap, flipGreen: boolean, float = false, linear = false): Uint8Array | Float32Array {
     const size = final.width;
-    const rt = createRT(size, size);
+    const rt = createRT(size, size, float ? { type: THREE.FloatType } : {});
     const u = this.mat.uniforms;
     u.uBase.value = final.textures[0];
     u.uOrm.value = final.textures[1];
@@ -164,8 +179,9 @@ export class Exporter {
     const s = (i: number) => SRC[ch[Math.min(i, ch.length - 1)]];
     u.uSrc.value.set(s(0), s(1), s(2), ch.length === 4 ? SRC[ch[3]] : SRC.one);
     u.uFlipGreen.value = flipGreen ? 1 : 0;
+    u.uLinear.value = linear ? 1 : 0;
     this.fs.render(this.renderer, this.mat, rt);
-    const buf = new Uint8Array(size * size * 4);
+    const buf = float ? new Float32Array(size * size * 4) : new Uint8Array(size * size * 4);
     this.renderer.readRenderTargetPixels(rt, 0, 0, size, size, buf);
     this.renderer.setRenderTarget(null);
     rt.dispose();
@@ -174,16 +190,17 @@ export class Exporter {
 
   /** Returns a zip containing one PNG per map of the preset. */
   /** One zip for all texture sets; with several sets the set name goes into each file name. */
-  exportTextures(sets: ExportSet[], mesh: PaintMesh, o: ExportOptions): Uint8Array {
+  async exportTextures(sets: ExportSet[], mesh: PaintMesh, o: ExportOptions): Promise<Uint8Array> {
     const files: Record<string, Uint8Array> = {};
     for (const set of sets) {
       const prefix = sets.length > 1 ? `${o.baseName}_${fileSafe(set.name)}` : o.baseName;
-      Object.assign(files, this.exportSet(set.final, mesh, o, prefix));
+      Object.assign(files, await this.exportSet(set.final, mesh, o, prefix));
     }
     return zipSync(files, { level: 0 });
   }
 
-  private exportSet(final: THREE.WebGLRenderTarget, mesh: PaintMesh, o: ExportOptions, prefix: string): Record<string, Uint8Array> {
+  private async exportSet(final: THREE.WebGLRenderTarget, mesh: PaintMesh, o: ExportOptions, prefix: string): Promise<Record<string, Uint8Array>> {
+    const format = o.format ?? 'png8';
     const size = final.width;
     // glTF UVs have v=0 at the image top; everything else uses the OpenGL convention (v=0 at the bottom).
     const gltfUVs = isGltfSource(mesh);
@@ -193,12 +210,25 @@ export class Exporter {
       // Our normals have +G along +v. Bring them into image-space OpenGL convention first, then optionally to DirectX.
       let flip = gltfUVs;
       if (isNormal && o.normal === 'directx') flip = !flip;
-      const rgba = this.renderMap(final, map, isNormal && flip);
-      let channels = map.channels.length;
-      if (map.optional === 'map' && !anyNonZero(rgba)) continue;
-      if (map.optional === 'alpha' && !anyTransparent(rgba)) channels = 3;
-      const png = encodePNG(rgba, size, size, channels, !gltfUVs);
-      files[`${prefix}_${map.suffix}.png`] = png;
+      const name = `${prefix}_${map.suffix}`;
+      if (format === 'png8') {
+        const rgba = this.renderMap(final, map, isNormal && flip);
+        if (map.optional === 'map' && !anyNonZero(rgba)) continue;
+        const channels = map.optional === 'alpha' && !anyTransparent(rgba) ? 3 : map.channels.length;
+        files[`${name}.png`] = encodePNG(rgba, size, size, channels, !gltfUVs);
+        continue;
+      }
+      const data = this.renderMap(final, map, isNormal && flip, true, format === 'exr');
+      if (map.optional === 'map' && !anyNonZero(data, 0.5 / 255)) continue;
+      if (format === 'png16') {
+        const channels = map.optional === 'alpha' && !anyTransparent(data, 1 - 0.5 / 65535) ? 3 : map.channels.length;
+        files[`${name}.png`] = encodePNG16(data, size, size, channels, !gltfUVs);
+      } else {
+        // EXRExporter writes GL row 0 last (standard image orientation); glTF UVs need row 0 first.
+        if (gltfUVs) flipRowsInPlace(data, size, size);
+        const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.FloatType);
+        files[`${name}.exr`] = await new EXRExporter().parse(tex, { type: THREE.HalfFloatType, compression: ZIP_COMPRESSION });
+      }
     }
     return files;
   }
@@ -257,16 +287,28 @@ export class Exporter {
   }
 }
 
-/** Any non-zero RGB in an RGBA8 buffer. */
-function anyNonZero(rgba: ArrayLike<number>) {
-  for (let i = 0; i < rgba.length; i += 4) if (rgba[i] | rgba[i + 1] | rgba[i + 2]) return true;
+/** Any RGB above `eps` in an RGBA buffer (8-bit or float). */
+function anyNonZero(rgba: ArrayLike<number>, eps = 0) {
+  for (let i = 0; i < rgba.length; i += 4) if (rgba[i] > eps || rgba[i + 1] > eps || rgba[i + 2] > eps) return true;
   return false;
 }
 
-/** Any alpha below 255 in an RGBA8 buffer. */
-function anyTransparent(rgba: ArrayLike<number>) {
-  for (let i = 3; i < rgba.length; i += 4) if (rgba[i] < 255) return true;
+/** Any alpha below `opaque` in an RGBA buffer (8-bit: 255, float: ~1). */
+function anyTransparent(rgba: ArrayLike<number>, opaque = 255) {
+  for (let i = 3; i < rgba.length; i += 4) if (rgba[i] < opaque) return true;
   return false;
+}
+
+function flipRowsInPlace(data: Float32Array, w: number, h: number) {
+  const row = w * 4;
+  const tmp = new Float32Array(row);
+  for (let y = 0; y < h >> 1; y++) {
+    const a = y * row;
+    const b = (h - 1 - y) * row;
+    tmp.set(data.subarray(a, a + row));
+    data.copyWithin(a, b, b + row);
+    data.set(tmp, b);
+  }
 }
 
 export function isGltfSource(mesh: PaintMesh) {
@@ -334,10 +376,37 @@ export function encodePNG(rgba: Uint8Array, w: number, h: number, channels: numb
       }
     }
   }
-  const idat = zlibSync(raw, { level: 6 });
-  const colorType = channels === 1 ? 0 : channels === 3 ? 2 : 6;
+  return pngFile(w, h, 8, channels === 1 ? 0 : channels === 3 ? 2 : 6, zlibSync(raw, { level: 6 }));
+}
+
+/**
+ * 16-bit PNG (grey / RGB / RGBA) from float RGBA pixels in 0..1, GL row order.
+ * @param flipRows true to write the last GL row first (standard image orientation)
+ */
+export function encodePNG16(rgba: Float32Array, w: number, h: number, channels: number, flipRows: boolean): Uint8Array {
+  const bpp = channels * 2;
+  const stride = w * bpp;
+  const raw = new Uint8Array((stride + 1) * h);
+  const row = new Uint8Array(stride);
+  for (let y = 0; y < h; y++) {
+    const srcRow = flipRows ? h - 1 - y : y;
+    for (let x = 0; x < w; x++) {
+      for (let c = 0; c < channels; c++) {
+        const v = Math.round(Math.min(1, Math.max(0, rgba[(srcRow * w + x) * 4 + c])) * 65535);
+        row[x * bpp + c * 2] = v >>> 8; // big-endian samples
+        row[x * bpp + c * 2 + 1] = v & 255;
+      }
+    }
+    const o = y * (stride + 1);
+    raw[o] = 1; // Sub filter
+    for (let i = 0; i < stride; i++) raw[o + 1 + i] = (row[i] - (i >= bpp ? row[i - bpp] : 0)) & 0xff;
+  }
+  return pngFile(w, h, 16, channels === 1 ? 0 : channels === 3 ? 2 : 6, zlibSync(raw, { level: 6 }));
+}
+
+function pngFile(w: number, h: number, depth: number, colorType: number, idat: Uint8Array): Uint8Array {
   const chunks: [string, Uint8Array][] = [
-    ['IHDR', new Uint8Array([w >>> 24, (w >>> 16) & 255, (w >>> 8) & 255, w & 255, h >>> 24, (h >>> 16) & 255, (h >>> 8) & 255, h & 255, 8, colorType, 0, 0, 0])],
+    ['IHDR', new Uint8Array([w >>> 24, (w >>> 16) & 255, (w >>> 8) & 255, w & 255, h >>> 24, (h >>> 16) & 255, (h >>> 8) & 255, h & 255, depth, colorType, 0, 0, 0])],
     ['IDAT', idat],
     ['IEND', new Uint8Array(0)],
   ];
