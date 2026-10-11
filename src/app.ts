@@ -316,6 +316,9 @@ export class App {
     s.part = 'content';
   }
 
+  /** Runs before the open document is replaced by another mesh or project (autosave snapshots it). */
+  beforeReplace: (() => Promise<void>) | null = null;
+
   /** Bumped on every change to the document; autosave compares against it. */
   revision = 0;
   /** The WebGL context was lost: the document's GPU data is gone until the app is reloaded. */
@@ -351,6 +354,8 @@ export class App {
    * @param sizes  texture resolution per set (defaults to the previous size or 2048)
    */
   async openMesh(mesh: PaintMesh, layers: 'reset' | 'keep' | (Layer[] | null)[] = 'reset', sizes?: number[]) {
+    // Ready-made stacks come from loadProject, which has run the hook before changing anything.
+    if (!Array.isArray(layers)) await this.beforeReplace?.().catch(() => undefined);
     this.ready = false;
     const old = this.sets;
     const keep = layers === 'keep' && old.length === mesh.sets.length;
@@ -1308,6 +1313,7 @@ export class App {
 
   async loadProject(bytes: Uint8Array) {
     const p = readProject(bytes);
+    await this.beforeReplace?.().catch(() => undefined);
     const psets = projectSets(p.json);
     this.setProgress(true, 'Loading project', 0);
     let mesh: PaintMesh;

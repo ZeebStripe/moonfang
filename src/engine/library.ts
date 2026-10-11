@@ -412,9 +412,12 @@ function tx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T
   return db().then(
     (d) =>
       new Promise<T>((resolve, reject) => {
-        const req = fn(d.transaction('kv', mode).objectStore('kv'));
-        req.onsuccess = () => resolve(req.result);
-        req.onerror = () => reject(req.error);
+        // Settle on the transaction, not the request: a write that doesn't fit (QuotaExceededError) is accepted by
+        // the request and only fails when the transaction commits.
+        const t = d.transaction('kv', mode);
+        const req = fn(t.objectStore('kv'));
+        t.oncomplete = () => resolve(req.result);
+        t.onabort = t.onerror = () => reject(t.error ?? req.error ?? new Error('Storage transaction failed'));
       }),
   );
 }

@@ -2,7 +2,7 @@ import { zip } from 'fflate';
 import type { App } from '../app';
 import { loadDemoMesh } from '../engine/meshLoader';
 import { addSave, dismissAutosave, pendingAutosave, readSave, requestPersistentStorage, type SaveMeta } from '../engine/saves';
-import { errorMessage, openModal } from './actions';
+import { errorMessage, openModal, saveProjectAction } from './actions';
 import { h } from './dom';
 import { savesDialog } from './saves';
 
@@ -11,6 +11,8 @@ const INTERVAL_MS = 30_000;
 /** Revision of the document as of the last snapshot (autosave or version). */
 let saved = -1;
 let saving: Promise<void> | null = null;
+/** Autosave failures in a row (the warning is shown once per streak). */
+let failures = 0;
 
 /** Zips the current project (GPU readback is synchronous; compression runs in fflate's workers). */
 async function snapshot(app: App): Promise<Uint8Array> {
@@ -24,7 +26,12 @@ function canSnapshot(app: App) {
 
 /** Autosaves now if anything changed since the last snapshot. */
 export async function autosaveNow(app: App, reason = 'manual'): Promise<void> {
-  if (saving) return saving;
+  if (saving) {
+    if (reason === 'timer' || reason === 'hidden') return saving;
+    // Restoring or opening something else: the snapshot in flight may predate the latest edits, so save again after it.
+    await saving;
+    return autosaveNow(app, reason);
+  }
   if (!canSnapshot(app) || app.revision === saved) return;
   const rev = app.revision;
   saving = (async () => {
@@ -33,9 +40,16 @@ export async function autosaveNow(app: App, reason = 'manual'): Promise<void> {
       await addSave('auto', app.mesh!.name, bytes);
       saved = rev;
       app.lastAutosave = Date.now();
+      failures = 0;
       if (reason === 'timer') app.emit('autosave');
     } catch (e) {
       console.warn('Autosave failed', e);
+      if (failures++ === 0) {
+        app.toast(`Autosave failed (${errorMessage(e)}). Your work is not being backed up — save the project to a file.`, 'error', {
+          label: 'Save Project',
+          run: () => saveProjectAction(app),
+        });
+      }
     } finally {
       saving = null;
     }
@@ -93,6 +107,8 @@ export async function setupAutosave(app: App): Promise<boolean> {
   saved = app.revision;
   // A freshly loaded mesh or project has nothing worth saving over an older session, so treat it as clean.
   app.on((k) => k === 'mesh' && (saved = app.revision));
+  // Opening another mesh or project replaces the document: snapshot the current one first.
+  app.beforeReplace = () => autosaveNow(app, 'replace');
   setInterval(() => void autosaveNow(app, 'timer'), INTERVAL_MS);
   document.addEventListener('visibilitychange', () => document.visibilityState === 'hidden' && void autosaveNow(app, 'hidden'));
   // Closing the window with changes newer than the last snapshot: let the browser ask first. After a GPU reset the

@@ -29,10 +29,12 @@ const INDEX = 'saves:index';
 const DISMISSED = 'saves:dismissed';
 const bytesKey = (id: string) => `save:${id}`;
 
-// Index updates run one after another, so concurrent saves can't drop each other's entries.
+// Index updates run one after another, so concurrent saves can't drop each other's entries: within this window
+// through a queue, and across windows / tabs on the same storage through a Web Lock.
 let queue: Promise<unknown> = Promise.resolve();
 function serial<T>(fn: () => Promise<T>): Promise<T> {
-  const run = queue.then(fn, fn);
+  const locked = (): Promise<T> => (navigator.locks ? navigator.locks.request('moonfang-saves', fn) : fn());
+  const run = queue.then(locked, locked);
   queue = run.catch(() => undefined);
   return run;
 }
