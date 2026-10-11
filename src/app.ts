@@ -99,8 +99,8 @@ export class App {
     spacing: 0.12,
     pressureSize: true,
     pressureOpacity: false,
-    values: { color: [0.8, 0.8, 0.78], roughness: 0.45, metallic: 0, height: 0.5 },
-    channels: { color: true, roughness: true, metallic: true, height: false, normal: false },
+    values: { color: [0.8, 0.8, 0.78], roughness: 0.45, metallic: 0, height: 0.5, emissive: [1, 0.55, 0.15], opacity: 1 },
+    channels: { color: true, roughness: true, metallic: true, height: false, normal: false, emissive: false, opacity: false },
     maps: null,
     tiling: 4,
     materialName: 'Custom',
@@ -368,6 +368,7 @@ export class App {
       baseColor: f.textures[0],
       orm: f.textures[1],
       normal: f.textures[2],
+      emissive: f.textures[3],
       meshA: s.maps.meshATex,
       meshB: s.maps.meshBTex,
       mask: s.compositor.maskPreview.texture,
@@ -671,6 +672,9 @@ export class App {
     this.brush.channels.color = this.brush.channels.roughness = this.brush.channels.metallic = true;
     this.brush.channels.height = !!p.maps?.height || p.values.height !== 0.5;
     this.brush.channels.normal = !!p.maps?.normal;
+    this.brush.channels.emissive = this.brush.channels.opacity = false;
+    this.brush.values.emissive ??= [1, 0.55, 0.15];
+    this.brush.values.opacity ??= 1;
     this.emit('brush');
   }
 

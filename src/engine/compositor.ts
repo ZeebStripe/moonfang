@@ -49,13 +49,18 @@ const LAYER_FRAG = /* glsl */ `
 in vec2 vUv;
 layout(location = 0) out vec4 o0;
 layout(location = 1) out vec4 o1;
+layout(location = 2) out vec4 o2;
 uniform sampler2D uAcc0;   // color.rgb (sRGB)
 uniform sampler2D uAcc1;   // rough, metal, height
-uniform int uKind;         // 0 = paint, 1 = fill
+uniform sampler2D uAcc2;   // emissive.rgb (sRGB), opacity
 uniform sampler2D uL0;
 uniform sampler2D uL1;
 uniform sampler2D uL2;
 uniform sampler2D uL3;
+uniform sampler2D uL4;
+uniform vec3 uFillEmis;
+uniform float uFillOpac;
+uniform vec2 uFillEnable2; // emissive, opacity
 uniform vec3 uFillColor;
 uniform vec3 uFillVals;    // rough, metal, height
 uniform vec4 uFillEnable;  // color, rough, metal, height
@@ -80,15 +85,22 @@ vec3 blendColor(vec3 a, vec3 b, int mode) {
 void main() {
   vec4 a0 = texture(uAcc0, vUv);
   vec4 a1 = texture(uAcc1, vUv);
+  vec4 a2 = texture(uAcc2, vUv);
   float m = computeMask(vUv) * uOpacity;
 
-  vec3 col; float colA, r, rA, mt, mtA, h, hA, nA;
+  vec3 col, em; float colA, r, rA, mt, mtA, h, hA, nA, emA, op, opA;
   vec2 nrm = vec2(0.0);
-  if (uKind == 0) {
-    vec4 l0 = texture(uL0, vUv), l1 = texture(uL1, vUv), l2 = texture(uL2, vUv), l3 = texture(uL3, vUv);
+  // Paint and fill layers are separate programs: together they would need more than 16 samplers.
+#ifdef PAINT_LAYER
+  {
+    vec4 l0 = texture(uL0, vUv), l1 = texture(uL1, vUv), l2 = texture(uL2, vUv), l3 = texture(uL3, vUv), l4 = texture(uL4, vUv);
     col = l0.rgb; colA = l0.a; r = l1.r; rA = l1.g; mt = l1.b; mtA = l1.a; h = l2.r; hA = l2.g;
     nrm = l3.xy * 2.0 - 1.0; nA = l3.z;
-  } else {
+    em = l4.rgb; emA = l4.a; op = l2.b; opA = l2.a;
+  }
+#else
+  {
+    em = uFillEmis; emA = uFillEnable2.x; op = uFillOpac; opA = uFillEnable2.y;
     vec3 pos = texture(uMeshA, vUv).xyz * uExtentRatio;
     vec3 wn = normalize(texture(uMeshB, vUv).xyz * 2.0 - 1.0);
     col = uFillColor; r = uFillVals.x; mt = uFillVals.y; h = uFillVals.z;
@@ -106,6 +118,7 @@ void main() {
     h = clamp(h + n * 0.6, 0.0, 1.0);
     colA = uFillEnable.x; rA = uFillEnable.y; mtA = uFillEnable.z; hA = uFillEnable.w;
   }
+#endif
 
   vec3 outCol = mix(a0.rgb, blendColor(a0.rgb, col, uBlend), colA * m);
   float outR = mix(a1.r, r, rA * m);
@@ -116,6 +129,7 @@ void main() {
   vec2 outN = uHeightBlend == 1 ? mix(below, nrm, nA * m) : below + nrm * nA * m;
   o0 = vec4(outCol, outN.x);
   o1 = vec4(outR, outM, outH, outN.y);
+  o2 = vec4(mix(a2.rgb, em, emA * m), mix(a2.a, op, opA * m));
 }
 `;
 
@@ -132,10 +146,13 @@ const GROUP_FRAG = /* glsl */ `
 in vec2 vUv;
 layout(location = 0) out vec4 o0;
 layout(location = 1) out vec4 o1;
+layout(location = 2) out vec4 o2;
 uniform sampler2D uBelow0;
 uniform sampler2D uBelow1;
+uniform sampler2D uBelow2;
 uniform sampler2D uGroup0;
 uniform sampler2D uGroup1;
+uniform sampler2D uGroup2;
 uniform float uOpacity;
 ${GLSL_NOISE}
 ${GLSL_MASK}
@@ -143,14 +160,16 @@ void main() {
   float m = computeMask(vUv) * uOpacity;
   o0 = mix(texture(uBelow0, vUv), texture(uGroup0, vUv), m);
   o1 = mix(texture(uBelow1, vUv), texture(uGroup1, vUv), m);
+  o2 = mix(texture(uBelow2, vUv), texture(uGroup2, vUv), m);
 }
 `;
 
 const DEFAULTS_FRAG = /* glsl */ `
 layout(location = 0) out vec4 o0;
 layout(location = 1) out vec4 o1;
-// Alpha channels carry the accumulated normal detail (tangent xy, 0 = flat).
-void main() { o0 = vec4(0.5, 0.5, 0.5, 0.0); o1 = vec4(0.5, 0.0, 0.5, 0.0); }
+layout(location = 2) out vec4 o2;
+// Alpha channels of 0/1 carry the accumulated normal detail (tangent xy, 0 = flat). 2: no emission, opaque.
+void main() { o0 = vec4(0.5, 0.5, 0.5, 0.0); o1 = vec4(0.5, 0.0, 0.5, 0.0); o2 = vec4(0.0, 0.0, 0.0, 1.0); }
 `;
 
 /** Final pass: sRGB→linear base color, ORM packing, height→normal, and UV padding through the jump-flood seeds. */
@@ -159,8 +178,10 @@ in vec2 vUv;
 layout(location = 0) out vec4 o0;  // linear base color
 layout(location = 1) out vec4 o1;  // ao, rough, metal, height
 layout(location = 2) out vec4 o2;  // tangent-space normal (OpenGL)
+layout(location = 3) out vec4 o3;  // linear emissive
 uniform sampler2D uAcc0;
 uniform sampler2D uAcc1;
+uniform sampler2D uAcc2;
 uniform sampler2D uMeshA;
 uniform sampler2D uMeshD;   // baked high-poly normal (flat without one)
 uniform sampler2D uCov;
@@ -192,7 +213,9 @@ void main() {
   // Painted detail sits on top of the baked high-poly normal (whiteout again).
   vec3 nb = normalize(texture(uMeshD, u).xyz * 2.0 - 1.0);
   n = normalize(vec3(nb.xy + n.xy, nb.z * n.z));
-  o0 = vec4(srgbToLinear(col), 1.0);
+  vec4 a2 = texture(uAcc2, u);
+  o0 = vec4(srgbToLinear(col), a2.a);  // alpha = opacity
+  o3 = vec4(srgbToLinear(a2.rgb), 1.0);
   o1 = vec4(ao, a1.r, a1.g, a1.b);
   o2 = vec4(n * 0.5 + 0.5, 1.0);
 }
@@ -206,7 +229,7 @@ export interface CompositeSettings {
 export class Compositor {
   size = 0;
   private pool: THREE.WebGLRenderTarget[] = [];
-  /** MRT x3: baseColor (linear), ORM+height, normal. Used directly by the viewport material and the exporter. */
+  /** MRT x4: baseColor (linear) + opacity, ORM+height, normal, emissive (linear). Used by the viewport and the exporter. */
   final!: THREE.WebGLRenderTarget;
   maskPreview!: THREE.WebGLRenderTarget;
 
@@ -214,19 +237,25 @@ export class Compositor {
   private groupMat = rawMaterial(GROUP_FRAG, {
     uBelow0: { value: null },
     uBelow1: { value: null },
+    uBelow2: { value: null },
     uGroup0: { value: null },
     uGroup1: { value: null },
+    uGroup2: { value: null },
     uOpacity: { value: 1 },
     ...maskUniforms(),
   });
-  private layerMat = rawMaterial(LAYER_FRAG, {
+  private layerUniforms: Record<string, THREE.IUniform> = {
     uAcc0: { value: null },
     uAcc1: { value: null },
-    uKind: { value: 0 },
+    uAcc2: { value: null },
     uL0: { value: null },
     uL1: { value: null },
     uL2: { value: null },
     uL3: { value: null },
+    uL4: { value: null },
+    uFillEmis: { value: new THREE.Vector3() },
+    uFillOpac: { value: 1 },
+    uFillEnable2: { value: new THREE.Vector2() },
     uFillNormal: { value: 0 },
     uFillColor: { value: new THREE.Vector3() },
     uFillVals: { value: new THREE.Vector3() },
@@ -237,11 +266,14 @@ export class Compositor {
     uHeightBlend: { value: 0 },
     ...maskUniforms(),
     ...mapUniforms(),
-  });
+  };
+  private paintLayerMat = rawMaterial(LAYER_FRAG, this.layerUniforms, { defines: { PAINT_LAYER: 1 } });
+  private fillLayerMat = rawMaterial(LAYER_FRAG, this.layerUniforms);
   private maskPreviewMat = rawMaterial(MASK_PREVIEW_FRAG, maskUniforms());
   private finalMat = rawMaterial(FINAL_FRAG, {
     uAcc0: { value: null },
     uAcc1: { value: null },
+    uAcc2: { value: null },
     uMeshA: { value: null },
     uMeshD: { value: null },
     uCov: { value: null },
@@ -263,7 +295,7 @@ export class Compositor {
     if (size === this.size) return;
     this.dispose();
     this.size = size;
-    this.final = createRT(size, size, { type: THREE.HalfFloatType, count: 3, linear: true, mipmaps: true });
+    this.final = createRT(size, size, { type: THREE.HalfFloatType, count: 4, linear: true, mipmaps: true });
     this.maskPreview = createRT(size, size, { linear: true });
   }
 
@@ -275,6 +307,7 @@ export class Compositor {
     const f = this.finalMat.uniforms;
     f.uAcc0.value = result.textures[0];
     f.uAcc1.value = result.textures[1];
+    f.uAcc2.value = result.textures[2];
     f.uMeshA.value = maps.meshATex;
     f.uMeshD.value = maps.meshDTex;
     f.uCov.value = maps.coverage.texture;
@@ -302,8 +335,10 @@ export class Compositor {
         const g = this.groupMat.uniforms;
         g.uBelow0.value = cur.textures[0];
         g.uBelow1.value = cur.textures[1];
+        g.uBelow2.value = cur.textures[2];
         g.uGroup0.value = inner.textures[0];
         g.uGroup1.value = inner.textures[1];
+        g.uGroup2.value = inner.textures[2];
         g.uOpacity.value = layer.opacity;
         this.setMaskUniforms(this.groupMat, layer, maps);
         this.fs.render(this.renderer, this.groupMat, dst);
@@ -319,38 +354,41 @@ export class Compositor {
   }
 
   private renderLayer(layer: Exclude<Layer, { kind: 'group' }>, src: THREE.WebGLRenderTarget, dst: THREE.WebGLRenderTarget, maps: MeshMaps, store: TextureStore) {
-    const u = this.layerMat.uniforms;
+    const mat = layer.kind === 'paint' ? this.paintLayerMat : this.fillLayerMat;
+    const u = this.layerUniforms;
     u.uAcc0.value = src.textures[0];
     u.uAcc1.value = src.textures[1];
+    u.uAcc2.value = src.textures[2];
     u.uOpacity.value = layer.opacity;
     u.uBlend.value = BLEND_MODES.indexOf(layer.blend);
     u.uHeightBlend.value = HEIGHT_BLENDS.indexOf(layer.heightBlend);
     if (layer.kind === 'paint') {
-      u.uKind.value = 0;
       u.uL0.value = layer.rt.textures[0];
       u.uL1.value = layer.rt.textures[1];
       u.uL2.value = layer.rt.textures[2];
       u.uL3.value = layer.rt.textures[3];
+      u.uL4.value = layer.rt.textures[4];
     } else {
-      u.uKind.value = 1;
-      u.uL0.value = u.uL1.value = u.uL2.value = u.uL3.value = this.dummy;
       const v = layer.values;
       u.uFillColor.value.set(v.color[0], v.color[1], v.color[2]);
       u.uFillVals.value.set(v.roughness, v.metallic, v.height);
       const c = layer.channels;
       u.uFillEnable.value.set(+c.color, +c.roughness, +c.metallic, +c.height);
       u.uFillNormal.value = c.normal ? 1 : 0;
+      u.uFillEmis.value.fromArray(v.emissive ?? [0, 0, 0]);
+      u.uFillOpac.value = v.opacity ?? 1;
+      u.uFillEnable2.value.set(c.emissive ? 1 : 0, c.opacity ? 1 : 0);
       u.uVariation.value.set(layer.variation, layer.variationScale, layer.seed);
       setMapUniforms(u, layer.maps, layer.tiling, store, this.size);
       u.uMeshC.value = maps.meshCTex;
     }
-    this.setMaskUniforms(this.layerMat, layer, maps);
-    this.fs.render(this.renderer, this.layerMat, dst);
+    this.setMaskUniforms(mat, layer, maps);
+    this.fs.render(this.renderer, mat, dst);
   }
 
   /** Accumulation targets are pooled; nested folders need one extra live target per level. */
   private acquire(): THREE.WebGLRenderTarget {
-    return this.pool.pop() ?? createRT(this.size, this.size, { type: THREE.HalfFloatType, count: 2 });
+    return this.pool.pop() ?? createRT(this.size, this.size, { type: THREE.HalfFloatType, count: 3 });
   }
   private release(rt: THREE.WebGLRenderTarget) {
     if (!this.pool.includes(rt)) this.pool.push(rt);

@@ -1,12 +1,20 @@
 import type { App } from '../app';
-import { BLEND_MODES, GEN_LABELS, GEN_TYPES, defaultGenerator, hasMaps, type ChannelKey, type Layer, type MaterialMaps, type MaterialValues, type ChannelSet } from '../engine/layers';
+import { BLEND_MODES, GEN_LABELS, GEN_TYPES, MAP_KEYS, defaultGenerator, hasMaps, type ChannelKey, type Layer, type MaterialMaps, type MaterialValues, type ChannelSet } from '../engine/layers';
 import type { TextureStore } from '../engine/library';
 import { displaySettings, saveMaterialDialog } from './actions';
 import { checkbox, colorField, h, iconButton, section, selectField, slider } from './dom';
 import { ICONS } from './icons';
 import { brushTipControls, stencilControls } from './brushUI';
 
-const CHANNEL_LABELS: Record<ChannelKey, string> = { color: 'Base Color', roughness: 'Roughness', metallic: 'Metallic', height: 'Height', normal: 'Normal' };
+const CHANNEL_LABELS: Record<ChannelKey, string> = {
+  color: 'Base Color',
+  roughness: 'Roughness',
+  metallic: 'Metallic',
+  height: 'Height',
+  normal: 'Normal',
+  emissive: 'Emissive',
+  opacity: 'Opacity (alpha)',
+};
 
 /** Channel toggles + values (shared by the brush and fill layers). Textured channels show their map instead. */
 function channelEditor(
@@ -17,7 +25,7 @@ function channelEditor(
   store?: TextureStore,
 ): HTMLElement {
   const texChip = (k: ChannelKey) => {
-    const id = maps?.[k];
+    const id = (MAP_KEYS as readonly string[]).includes(k) ? maps?.[k as (typeof MAP_KEYS)[number]] : undefined;
     if (!id) return null;
     const name = store?.asset(id)?.name ?? 'texture';
     const label = k === 'roughness' && maps?.gloss ? `${name} (gloss, inverted)` : name;
@@ -55,6 +63,17 @@ function channelEditor(
     'normal',
     texChip('normal') ??
       h('div', { class: 'field', title: 'Without a normal map this writes a flat normal, which erases normal detail below' }, h('label', {}, 'Normal'), h('span', { class: 'dim small' }, 'flat (no map)')),
+  );
+  add('emissive', colorField('Emissive', values.emissive ?? [0, 0, 0], (c) => ((values.emissive = c), onChange())));
+  add(
+    'opacity',
+    slider('Opacity (alpha)', {
+      value: values.opacity ?? 1,
+      min: 0,
+      max: 1,
+      onInput: (v) => ((values.opacity = v), onChange()),
+      title: 'Surface transparency: exported as base color alpha',
+    }),
   );
   return h('div', { class: 'channels' }, ...rows);
 }
@@ -205,7 +224,7 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
     const prev = app.brush.channels;
     const prevOpacity = app.brush.opacity;
     app.part = 'content';
-    app.brush.channels = { color: true, roughness: true, metallic: true, height: true, normal: true };
+    app.brush.channels = { color: true, roughness: true, metallic: true, height: true, normal: true, emissive: true, opacity: true };
     app.brush.opacity = 1;
     app.fillSelected(true);
     app.brush.channels = prev;

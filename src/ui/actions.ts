@@ -108,7 +108,22 @@ export function exportDialog(app: App) {
     const prefixes = app.sets.length > 1 ? app.sets.map((s) => `${baseName}_${safeName(s.info.name)}`) : [baseName];
     mapsList.replaceChildren(
       ...prefixes.flatMap((pre) =>
-        preset.maps.map((m) => h('li', {}, `${pre}_${m.suffix}.png`, h('span', { class: 'dim' }, ` · ${['', 'grey', '', 'RGB', 'RGBA'][m.channels.length]}`))),
+        preset.maps.map((m) =>
+          h(
+            'li',
+            {},
+            `${pre}_${m.suffix}.png`,
+            h(
+              'span',
+              { class: 'dim' },
+              m.optional === 'map'
+                ? ' · RGB, only if used'
+                : m.optional === 'alpha'
+                  ? ' · RGB (+ opacity alpha if used)'
+                  : ` · ${['', 'grey', '', 'RGB', 'RGBA'][m.channels.length]}`,
+            ),
+          ),
+        ),
       ),
     );
   };

@@ -5,12 +5,14 @@ import { createRT, FullscreenPass, GLSL_NOISE, rawMaterial } from './gl';
 import type { PaintMesh } from './meshLoader';
 
 /** Channel sources an export map can pull from. */
-const SRC = { baseR: 0, baseG: 1, baseB: 2, ao: 3, rough: 4, metal: 5, height: 6, nX: 7, nY: 8, nZ: 9, one: 10, zero: 11, smooth: 12 } as const;
+const SRC = { baseR: 0, baseG: 1, baseB: 2, ao: 3, rough: 4, metal: 5, height: 6, nX: 7, nY: 8, nZ: 9, one: 10, zero: 11, smooth: 12, opacity: 13, emR: 14, emG: 15, emB: 16 } as const;
 type Src = keyof typeof SRC;
 
 interface ExportMap {
   suffix: string;
   channels: Src[]; // 1 = grey, 3 = RGB, 4 = RGBA
+  /** 'alpha': the 4th channel is dropped when it is fully opaque; 'map': the map is skipped when it is all black */
+  optional?: 'alpha' | 'map';
 }
 
 export interface ExportPreset {
@@ -20,8 +22,9 @@ export interface ExportPreset {
   maps: ExportMap[];
 }
 
-const BASE: ExportMap = { suffix: 'BaseColor', channels: ['baseR', 'baseG', 'baseB'] };
+const BASE: ExportMap = { suffix: 'BaseColor', channels: ['baseR', 'baseG', 'baseB', 'opacity'], optional: 'alpha' };
 const NORMAL: ExportMap = { suffix: 'Normal', channels: ['nX', 'nY', 'nZ'] };
+const EMISSIVE: ExportMap = { suffix: 'Emissive', channels: ['emR', 'emG', 'emB'], optional: 'map' };
 
 export const EXPORT_PRESETS: ExportPreset[] = [
   {
@@ -35,29 +38,31 @@ export const EXPORT_PRESETS: ExportPreset[] = [
       NORMAL,
       { suffix: 'Height', channels: ['height'] },
       { suffix: 'AO', channels: ['ao'] },
+      EMISSIVE,
     ],
   },
   {
     id: 'gltf',
     name: 'glTF / Godot / three.js (ORM)',
     normal: 'opengl',
-    maps: [BASE, { suffix: 'ORM', channels: ['ao', 'rough', 'metal'] }, NORMAL],
+    maps: [BASE, { suffix: 'ORM', channels: ['ao', 'rough', 'metal'] }, NORMAL, EMISSIVE],
   },
   {
     id: 'unreal',
     name: 'Unreal Engine (ORM, DirectX normal)',
     normal: 'directx',
-    maps: [BASE, { suffix: 'OcclusionRoughnessMetallic', channels: ['ao', 'rough', 'metal'] }, NORMAL],
+    maps: [BASE, { suffix: 'OcclusionRoughnessMetallic', channels: ['ao', 'rough', 'metal'] }, NORMAL, EMISSIVE],
   },
   {
     id: 'unity_urp',
     name: 'Unity URP (Metallic + Smoothness)',
     normal: 'opengl',
     maps: [
-      { suffix: 'BaseMap', channels: ['baseR', 'baseG', 'baseB'] },
+      { suffix: 'BaseMap', channels: ['baseR', 'baseG', 'baseB', 'opacity'], optional: 'alpha' },
       { suffix: 'MetallicSmoothness', channels: ['metal', 'metal', 'metal', 'smooth'] },
       NORMAL,
       { suffix: 'Occlusion', channels: ['ao'] },
+      EMISSIVE,
     ],
   },
   {
@@ -65,9 +70,10 @@ export const EXPORT_PRESETS: ExportPreset[] = [
     name: 'Unity HDRP (Mask Map)',
     normal: 'opengl',
     maps: [
-      { suffix: 'BaseMap', channels: ['baseR', 'baseG', 'baseB'] },
+      { suffix: 'BaseMap', channels: ['baseR', 'baseG', 'baseB', 'opacity'], optional: 'alpha' },
       { suffix: 'MaskMap', channels: ['metal', 'ao', 'zero', 'smooth'] },
       NORMAL,
+      EMISSIVE,
     ],
   },
 ];
@@ -78,10 +84,17 @@ layout(location = 0) out vec4 o0;
 uniform sampler2D uBase;
 uniform sampler2D uOrm;
 uniform sampler2D uNormal;
+uniform sampler2D uEmissive;
 uniform ivec4 uSrc;
 uniform int uFlipGreen;
 ${GLSL_NOISE}
+vec3 em;
+float alpha;
 float pick(int s, vec3 base, vec4 orm, vec3 n) {
+  if (s == 13) return alpha;
+  if (s == 14) return em.r;
+  if (s == 15) return em.g;
+  if (s == 16) return em.b;
   if (s == 0) return base.r;
   if (s == 1) return base.g;
   if (s == 2) return base.b;
@@ -97,7 +110,10 @@ float pick(int s, vec3 base, vec4 orm, vec3 n) {
   return 1.0 - orm.g;
 }
 void main() {
-  vec3 base = linearToSrgb(texture(uBase, vUv).rgb);
+  vec4 b4 = texture(uBase, vUv);
+  vec3 base = linearToSrgb(b4.rgb);
+  alpha = b4.a;
+  em = linearToSrgb(texture(uEmissive, vUv).rgb);
   vec4 orm = texture(uOrm, vUv);
   vec3 n = texture(uNormal, vUv).rgb;
   o0 = vec4(pick(uSrc.x, base, orm, n), pick(uSrc.y, base, orm, n), pick(uSrc.z, base, orm, n), pick(uSrc.w, base, orm, n));
@@ -122,6 +138,7 @@ export class Exporter {
     uBase: { value: null },
     uOrm: { value: null },
     uNormal: { value: null },
+    uEmissive: { value: null },
     uSrc: { value: new THREE.Vector4() },
     uFlipGreen: { value: 0 },
   });
@@ -142,6 +159,7 @@ export class Exporter {
     u.uBase.value = final.textures[0];
     u.uOrm.value = final.textures[1];
     u.uNormal.value = final.textures[2];
+    u.uEmissive.value = final.textures[3];
     const ch = map.channels;
     const s = (i: number) => SRC[ch[Math.min(i, ch.length - 1)]];
     u.uSrc.value.set(s(0), s(1), s(2), ch.length === 4 ? SRC[ch[3]] : SRC.one);
@@ -176,7 +194,10 @@ export class Exporter {
       let flip = gltfUVs;
       if (isNormal && o.normal === 'directx') flip = !flip;
       const rgba = this.renderMap(final, map, isNormal && flip);
-      const png = encodePNG(rgba, size, size, map.channels.length, !gltfUVs);
+      let channels = map.channels.length;
+      if (map.optional === 'map' && !anyNonZero(rgba)) continue;
+      if (map.optional === 'alpha' && !anyTransparent(rgba)) channels = 3;
+      const png = encodePNG(rgba, size, size, channels, !gltfUVs);
       files[`${prefix}_${map.suffix}.png`] = png;
     }
     return files;
@@ -212,8 +233,16 @@ export class Exporter {
       return t;
     };
     const orm = tex({ suffix: 'orm', channels: ['ao', 'rough', 'metal'] }, false);
+    const base = tex(BASE, true);
+    const emissive = tex(EMISSIVE, true);
+    const baseData = (base.image as HTMLCanvasElement).getContext('2d')!.getImageData(0, 0, size, size).data;
+    const emData = (emissive.image as HTMLCanvasElement).getContext('2d')!.getImageData(0, 0, size, size).data;
     const material = new THREE.MeshStandardMaterial({
-      map: tex(BASE, true),
+      map: base,
+      // glTF alphaMode BLEND only when the opacity channel is actually used
+      transparent: anyTransparent(baseData),
+      emissiveMap: anyNonZero(emData) ? emissive : null,
+      emissive: anyNonZero(emData) ? 0xffffff : 0x000000,
       roughnessMap: orm,
       metalnessMap: orm,
       aoMap: orm,
@@ -226,6 +255,18 @@ export class Exporter {
     material.name = name;
     return material;
   }
+}
+
+/** Any non-zero RGB in an RGBA8 buffer. */
+function anyNonZero(rgba: ArrayLike<number>) {
+  for (let i = 0; i < rgba.length; i += 4) if (rgba[i] | rgba[i + 1] | rgba[i + 2]) return true;
+  return false;
+}
+
+/** Any alpha below 255 in an RGBA8 buffer. */
+function anyTransparent(rgba: ArrayLike<number>) {
+  for (let i = 3; i < rgba.length; i += 4) if (rgba[i] < 255) return true;
+  return false;
 }
 
 export function isGltfSource(mesh: PaintMesh) {

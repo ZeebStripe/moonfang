@@ -205,10 +205,15 @@ layout(location = 0) out vec4 o0;
 layout(location = 1) out vec4 o1;
 layout(location = 2) out vec4 o2;
 layout(location = 3) out vec4 o3;
+layout(location = 4) out vec4 o4;
 uniform sampler2D uS0;
 uniform sampler2D uS1;
 uniform sampler2D uS2;
 uniform sampler2D uS3;
+uniform sampler2D uS4;
+uniform vec3 uEmis;       // emissive (sRGB)
+uniform float uOpac;      // opacity value
+uniform vec2 uEn2;        // emissive, opacity enabled
 uniform sampler2D uStroke;
 uniform float uEnN;
 uniform float uOpacity;
@@ -232,7 +237,7 @@ vec2 chan(float v, float a, float bv, float k) {
 }
 void main() {
   float m = texture(uStroke, vUv).r * uOpacity;
-  vec4 s0 = texture(uS0, vUv), s1 = texture(uS1, vUv), s2 = texture(uS2, vUv), s3 = texture(uS3, vUv);
+  vec4 s0 = texture(uS0, vUv), s1 = texture(uS1, vUv), s2 = texture(uS2, vUv), s3 = texture(uS3, vUv), s4 = texture(uS4, vUv);
   vec3 bc = uColor;
   vec3 bv = uVals;
   vec2 bn = vec2(0.0);   // flat unless the brush material has a normal map
@@ -262,7 +267,14 @@ void main() {
     o0 = vec4(c, na);
   }
   o1 = vec4(chan(s1.r, s1.g, bv.x, m * uEn.y), chan(s1.b, s1.a, bv.y, m * uEn.z));
-  o2 = vec4(chan(s2.r, s2.g, bv.z, m * uEn.w), 0.0, 1.0);
+  o2 = vec4(chan(s2.r, s2.g, bv.z, m * uEn.w), chan(s2.b, s2.a, uOpac, m * uEn2.y));
+  float ke = m * uEn2.x;
+  if (uErase == 1) {
+    o4 = vec4(s4.rgb, s4.a * (1.0 - ke));
+  } else {
+    float ea = s4.a + (1.0 - s4.a) * ke;
+    o4 = vec4(ea > 1e-4 ? (s4.rgb * s4.a * (1.0 - ke) + uEmis * ke) / ea : uEmis, ea);
+  }
   float kn = m * uEnN;
   vec2 nx = chan(s3.x, s3.z, bn.x * 0.5 + 0.5, kn);
   vec2 ny = chan(s3.y, s3.z, bn.y * 0.5 + 0.5, kn);
@@ -333,6 +345,10 @@ export class Painter {
     uS1: { value: null },
     uS2: { value: null },
     uS3: { value: null },
+    uS4: { value: null },
+    uEmis: { value: new THREE.Vector3() },
+    uOpac: { value: 1 },
+    uEn2: { value: new THREE.Vector2() },
     uEnN: { value: 0 },
     uStroke: { value: null },
     uOpacity: { value: 1 },
@@ -490,6 +506,10 @@ export class Painter {
       p.uS1.value = this.snapshot.textures[1];
       p.uS2.value = this.snapshot.textures[2];
       p.uS3.value = this.snapshot.textures[3];
+      p.uS4.value = this.snapshot.textures[4];
+      p.uEmis.value.fromArray(b.values.emissive ?? [0, 0, 0]);
+      p.uOpac.value = b.values.opacity ?? 1;
+      p.uEn2.value.set(b.channels.emissive ? 1 : 0, b.channels.opacity ? 1 : 0);
       p.uEnN.value = b.channels.normal ? 1 : 0;
       p.uStroke.value = this.strokeRT.texture;
       p.uOpacity.value = b.opacity;

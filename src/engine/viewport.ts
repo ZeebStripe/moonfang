@@ -10,6 +10,8 @@ export const VIEW_MODES = [
   ['metallic', 'Metallic'],
   ['height', 'Height'],
   ['normal', 'Normal'],
+  ['emissive', 'Emissive'],
+  ['opacity', 'Opacity'],
   ['ao', 'Ambient Occlusion'],
   ['curvature', 'Curvature'],
   ['worldNormal', 'World Normal'],
@@ -22,6 +24,7 @@ export interface ViewportTextures {
   baseColor: THREE.Texture;
   orm: THREE.Texture;
   normal: THREE.Texture;
+  emissive: THREE.Texture;
   meshA: THREE.Texture;
   meshB: THREE.Texture;
   mask: THREE.Texture;
@@ -70,6 +73,8 @@ export class Viewport {
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
     const gl = this.renderer.getContext() as WebGL2RenderingContext;
     if (!gl.getExtension('EXT_color_buffer_float')) throw new Error('This browser/GPU does not support float render targets (EXT_color_buffer_float).');
+    // Paint layers write five render targets at once.
+    if (gl.getParameter(gl.MAX_DRAW_BUFFERS) < 5) throw new Error('This GPU supports fewer than 5 simultaneous render targets.');
 
     this.camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
     this.camera.position.set(2.6, 1.6, 3.4);
@@ -89,7 +94,11 @@ export class Viewport {
   setGeometry(geometry: THREE.BufferGeometry, setCount: number) {
     if (this.mesh) this.scene.remove(this.mesh);
     for (const m of [...this.pbrs, ...this.channelMats]) m.dispose();
-    this.pbrs = Array.from({ length: setCount }, () => new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 1, metalness: 1, side: THREE.DoubleSide }));
+    // Transparent so the opacity channel (base color alpha) shows; fully opaque texels render as before.
+    this.pbrs = Array.from(
+      { length: setCount },
+      () => new THREE.MeshPhysicalMaterial({ color: 0xffffff, roughness: 1, metalness: 1, side: THREE.DoubleSide, transparent: true, emissive: 0xffffff }),
+    );
     this.channelMats = Array.from({ length: setCount }, () => this.makeChannelMat());
     this.textures = new Array(setCount).fill(null);
     this.mesh = new THREE.Mesh(geometry, this.pbrs);
@@ -106,6 +115,7 @@ export class Viewport {
     m.metalnessMap = t.orm;
     m.aoMap = t.orm;
     m.normalMap = t.normal;
+    m.emissiveMap = t.emissive;
     m.needsUpdate = true;
     this.applyMode();
   }
@@ -139,6 +149,8 @@ export class Viewport {
         metallic: [t.orm, 4],
         height: [t.orm, 5],
         normal: [t.normal, 1],
+        emissive: [t.emissive, 0],
+        opacity: [t.baseColor, 5],
         ao: [t.meshA, 5],
         curvature: [t.meshB, 5],
         worldNormal: [t.meshB, 1],

@@ -1,8 +1,8 @@
 import * as THREE from 'three';
 import { clearTarget, createRT } from './gl';
 
-export type ChannelKey = 'color' | 'roughness' | 'metallic' | 'height' | 'normal';
-export const CHANNELS: ChannelKey[] = ['color', 'roughness', 'metallic', 'height', 'normal'];
+export type ChannelKey = 'color' | 'roughness' | 'metallic' | 'height' | 'normal' | 'emissive' | 'opacity';
+export const CHANNELS: ChannelKey[] = ['color', 'roughness', 'metallic', 'height', 'normal', 'emissive', 'opacity'];
 export type ChannelSet = Record<ChannelKey, boolean>;
 
 export interface MaterialValues {
@@ -12,6 +12,10 @@ export interface MaterialValues {
   metallic: number;
   /** 0..1, 0.5 = neutral */
   height: number;
+  /** sRGB 0..1 (black when missing) */
+  emissive?: [number, number, number];
+  /** 0..1 (1 when missing) */
+  opacity?: number;
 }
 
 /** Texture-backed channels of a material (ids into the TextureStore), sampled triplanar in object space. */
@@ -170,9 +174,13 @@ export function defaultGenerator(type: GenType): GeneratorParams {
   }
 }
 
-/** [0] color.rgb + a, [1] rough, roughA, metal, metalA, [2] height, heightA, [3] normal.xy (0.5 = flat), normalA */
+/**
+ * [0] color.rgb + a, [1] rough, roughA, metal, metalA, [2] height, heightA, opacity, opacityA,
+ * [3] normal.xy (0.5 = flat), normalA, [4] emissive.rgb + a
+ */
+export const PAINT_TARGETS = 5;
 export function createPaintRT(size: number): THREE.WebGLRenderTarget {
-  return createRT(size, size, { count: 4 });
+  return createRT(size, size, { count: PAINT_TARGETS });
 }
 
 export function createMaskRT(renderer: THREE.WebGLRenderer, size: number, value: number): THREE.WebGLRenderTarget {
@@ -199,7 +207,7 @@ export function createFillLayer(name: string, values: MaterialValues, channels?:
     mask: null,
     values: { ...values, color: [...values.color] as [number, number, number] },
     // Normal is opt-in: a fill without a normal map would otherwise flatten the details below it.
-    channels: { color: true, roughness: true, metallic: true, height: true, normal: false, ...channels },
+    channels: { color: true, roughness: true, metallic: true, height: true, normal: false, emissive: false, opacity: false, ...channels },
     variation: 0,
     variationScale: 6,
     seed: Math.random() * 100,

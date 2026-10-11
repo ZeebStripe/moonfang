@@ -2,6 +2,7 @@ import * as THREE from 'three';
 import { strToU8, strFromU8, unzipSync, zipSync } from 'fflate';
 import { Copier, readRGBA8 } from './gl';
 import {
+  PAINT_TARGETS,
   bumpLayerId,
   createMaskRT,
   createPaintRT,
@@ -171,6 +172,12 @@ export function restoreLayers(renderer: THREE.WebGLRenderer, copier: Copier, p: 
     bumpLayerId(s.id);
     if (s.kind === 'paint') {
       const rt = createPaintRT(size);
+      // Before the emissive/opacity channels, target [2] held (height, heightA, 0, 1): clear what is now opacity.
+      if (s.data.length < PAINT_TARGETS && p.files[s.data[2]]) {
+        const d = p.files[s.data[2]].slice();
+        for (let i = 2; i < d.length; i += 4) d[i] = d[i + 1] = 0;
+        p.files[s.data[2]] = d;
+      }
       const tex = s.data.map(upload);
       // Projects saved before the normal channel have three paint targets; the fourth starts empty.
       while (tex.length < rt.textures.length) {
