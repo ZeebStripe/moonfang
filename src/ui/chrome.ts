@@ -51,6 +51,12 @@ export function mountTopbar(app: App, root: HTMLElement) {
   const resSelect = h('div');
   const renderSelects = () => {
     viewSelect.replaceChildren(
+      h(
+        'div',
+        { class: 'seg', title: '3D model or 2D UV layout (U)' },
+        h('button', { class: `seg-btn ${app.uvView ? '' : 'active'}`, onclick: () => app.setUVView(false) }, '3D'),
+        h('button', { class: `seg-btn ${app.uvView ? 'active' : ''}`, onclick: () => app.setUVView(true) }, '2D'),
+      ),
       selectField('View', VIEW_MODES, app.viewport.mode, (m: ViewMode) => {
         app.viewport.setMode(m);
         app.invalidate();

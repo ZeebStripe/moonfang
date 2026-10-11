@@ -248,8 +248,12 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
             if (l?.mask) app.select(l.id, app.part === 'mask' ? 'content' : 'mask');
             break;
           }
+          case 'u':
+            app.setUVView(!app.uvView);
+            break;
           case 'f':
-            app.viewport.frame();
+            if (app.uvView) app.viewport.frameUV();
+            else app.viewport.frame();
             break;
           case 'c': {
             const modes = VIEW_MODES.map((m) => m[0]);

@@ -1112,3 +1112,25 @@ table.shortcuts td {
   white-space: nowrap;
   font-size: 12px;
 }
+
+/* ---------------------------------------------------------------- 3D / 2D toggle */
+.seg {
+  display: inline-flex;
+  margin-right: 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  overflow: hidden;
+  vertical-align: middle;
+}
+.seg-btn {
+  padding: 3px 10px;
+  background: var(--panel-2);
+  border: 0;
+  font-size: 12px;
+  cursor: pointer;
+  color: inherit;
+}
+.seg-btn.active {
+  background: var(--accent);
+  color: #fff;
+}

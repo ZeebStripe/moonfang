@@ -5,7 +5,7 @@ It runs in the browser (WebGL2) and is built with TypeScript and three.js.
 
 ## Features (v0.1)
 
-- **Projection painting** onto the 3D model across every PBR channel at once: base color, roughness, metallic, height and normal. Normal detail is combined with the normal derived from height, and normal maps are projected triplanar, then converted into each texel's UV tangent frame (baked as a mesh map). It paints across UV seams and is occlusion-aware, so strokes never bleed onto hidden surfaces. It also fades out at grazing angles.
+- **Projection painting** onto the 3D model across every PBR channel at once: base color, roughness, metallic, height, normal, **emissive** and **opacity**. Normal detail is combined with the normal derived from height, and normal maps are projected triplanar, then converted into each texel's UV tangent frame (baked as a mesh map). It paints across UV seams and is occlusion-aware, so strokes never bleed onto hidden surfaces. It also fades out at grazing angles.
 - **Brush**: size, hardness, opacity, spacing, pen pressure (size and/or opacity), per-channel toggles and an eraser.
   - **Tips**: round, square, splatter, grunge, scratches, star and leaf, plus imported images (dark-on-light images are inverted automatically). Tips have an angle and can follow the stroke direction.
   - **Dynamics**: size, angle and opacity jitter, scatter, and lazy-mouse smoothing.
@@ -40,13 +40,18 @@ It runs in the browser (WebGL2) and is built with TypeScript and three.js.
 - **Viewport**:
   - PBR preview with image-based lighting (built-in studio or your own `.hdr`)
   - exposure and environment rotation
-  - channel views: base color, roughness, metallic, height, normal, AO, curvature, world normal, position, layer mask
+  - channel views: base color, roughness, metallic, height, normal, emissive, opacity, AO, curvature, world normal, position, layer mask
+  - a **2D UV view** (toggle `3D | 2D` in the top bar, or `U`): the active texture set's texture laid out flat with its
+    UV wireframe, UV padding dimmed. You can pan, zoom and **paint** there too: strokes are projected onto a flat copy
+    of the mesh at its UVs, using the same painter as the 3D view.
 - **Export**:
-  - texture sets as PNG zips, with presets for **separate PBR maps**, **glTF/Godot/three.js (ORM)**, **Unreal (ORM, DirectX normal)**, **Unity URP (Metallic/Smoothness)** and **Unity HDRP (Mask Map)**
-  - a **textured GLB** with the material applied
+  - texture sets as **8-bit PNG, 16-bit PNG or OpenEXR** (half float, linear color) zips, with presets for **separate PBR maps**, **glTF/Godot/three.js (ORM)**, **Unreal (ORM, DirectX normal)**, **Unity URP (Metallic/Smoothness)** and **Unity HDRP (Mask Map)**
+  - an Emissive map and base-color alpha (opacity) are added automatically when those channels are used
+  - a **textured GLB** with the material applied (emissive texture and alpha blending included when used)
 - **Projects**: save and load `.opp` files, which contain the mesh, layers, masks and settings, all lossless.
 - **Multiple texture sets**: each material of the model is its own texture set, with its own layer stack, resolution and baked maps. Switch sets above the layer stack. Painting only affects the active set, while the whole model still occludes. Export writes one set of maps per texture set (`<name>_<set>_<map>.png`), and the GLB gets one material per set.
-- **Undo/redo** for strokes and fills, with 24 steps.
+- **Undo/redo** for strokes, fills and layer operations: adding, deleting, duplicating, moving and grouping layers,
+  masks and generators, renames and property changes (a slider drag is one step). Up to 80 steps, 24 of them strokes.
 - **Autosave**: every 30 seconds to browser storage, with a restore prompt the next time you start.
 - **Texture resolution**: 512–4096, and existing layers are resampled when you change it.
 
@@ -102,7 +107,8 @@ npm run build
 | Ctrl+G | Put the selected layer in a new folder |
 | `M` | Toggle painting the layer content / its mask |
 | `C` | Cycle the viewport channel |
-| `F` | Frame the model |
+| `F` | Frame the model (the UV square in the 2D view) |
+| `U` | Toggle the 3D / 2D UV view |
 | Ctrl+Z / Ctrl+Shift+Z | Undo / Redo |
 | Ctrl+O / Ctrl+S / Ctrl+E | Open mesh / Save project / Export |
 | `?` | Shortcut list |
@@ -115,7 +121,7 @@ All painting and compositing runs on the GPU in **texture space**.
   then rasterises the mesh *in UV space*. Each texel projects its world position into the screen, tests it against the
   depth map, and accumulates brush falloff into a stroke mask using MAX blending. An apply pass re-derives the layer from
   a pre-stroke snapshot, so stroke opacity never builds up, and that snapshot doubles as the undo entry.
-- **Layers** (`src/engine/compositor.ts`): Paint layers store per-channel value + coverage in three RGBA8 targets. Fill
+- **Layers** (`src/engine/compositor.ts`): Paint layers store per-channel value + coverage in five RGBA8 targets. Fill
   layers are uniforms plus fbm variation. Each layer is composited with ping-pong MRT passes, with masks and generators
   evaluated in the same shader. A final pass converts sRGB to linear, packs AO/roughness/metallic/height, derives a
   tangent-space normal from height, and applies UV padding through the jump-flood seed map.
@@ -130,9 +136,10 @@ All painting and compositing runs on the GPU in **texture space**.
 - High-poly baking projects every texture set against the whole high poly (no matching by mesh name yet), and the cage
   is a uniform distance rather than an editable cage mesh. Normals use a per-triangle UV tangent frame, not MikkTSpace,
   so other engines may show slight shading differences on the low poly's smoothing.
-- Missing so far: an emissive/opacity channel, an anchor/filter system, a 2D UV view, and undo for layer operations (undo only covers strokes and fills).
+- Missing so far: an anchor/filter system, and emissive/opacity texture maps in imported materials (both channels can
+  be painted and filled, but texture-set import only reads color/roughness/metallic/height/normal).
+- Symmetry is disabled while painting in the 2D view.
 - `.sbsar` procedural material files can't be imported, since they need a proprietary engine.
-- PNG export is 8-bit, so there is no 16-bit height or EXR output yet.
 - WebGL2 with `EXT_color_buffer_float` is required. That covers any recent desktop browser.
 
 ## License

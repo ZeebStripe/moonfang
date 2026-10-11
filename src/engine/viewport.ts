@@ -25,6 +25,8 @@ export interface ViewportTextures {
   orm: THREE.Texture;
   normal: THREE.Texture;
   emissive: THREE.Texture;
+  /** UV coverage of the set (1 inside islands) */
+  coverage: THREE.Texture;
   meshA: THREE.Texture;
   meshB: THREE.Texture;
   mask: THREE.Texture;
@@ -33,6 +35,8 @@ export interface ViewportTextures {
 const CHANNEL_VIEW_FRAG = /* glsl */ `
 uniform sampler2D uTex;
 uniform int uMode;
+uniform sampler2D uCov;
+uniform int uDim;      // 2D view: darken UV padding (texels outside the islands)
 varying vec2 vUv;
 vec3 toSrgb(vec3 c) { return mix(c * 12.92, 1.055 * pow(max(c, 0.0), vec3(1.0 / 2.4)) - 0.055, step(0.0031308, c)); }
 void main() {
@@ -44,6 +48,7 @@ void main() {
   else if (uMode == 3) c = vec3(t.g);
   else if (uMode == 4) c = vec3(t.b);
   else c = vec3(t.a);
+  if (uDim == 1 && texture2D(uCov, vUv).r < 0.5) c *= 0.3;
   gl_FragColor = vec4(c, 1.0);
 }
 `;
@@ -58,6 +63,15 @@ export class Viewport {
   channelMats: THREE.ShaderMaterial[] = [];
   mode: ViewMode = 'material';
   private textures: (ViewportTextures | null)[] = [];
+
+  // 2D UV view: the active set's textures on the 0..1 square, with its UV wireframe on top.
+  uvView = false;
+  uvCamera = new THREE.OrthographicCamera(0, 1, 1, 0, -10, 10);
+  uvControls: OrbitControls;
+  private uvScene = new THREE.Scene();
+  private uvPlane: THREE.Mesh<THREE.PlaneGeometry, THREE.ShaderMaterial>;
+  private uvWire: THREE.LineSegments | null = null;
+  private uvSet = 0;
   private envTexture: THREE.Texture | null = null;
   private pmrem: THREE.PMREMGenerator;
   private _showBackground = true;
@@ -87,6 +101,25 @@ export class Viewport {
 
     this.pmrem = new THREE.PMREMGenerator(this.renderer);
     this.setEnvironment(this.pmrem.fromScene(new RoomEnvironment(), 0.04).texture);
+
+    this.uvScene.background = new THREE.Color(0x1e1f22);
+    const plane = new THREE.PlaneGeometry(1, 1);
+    plane.translate(0.5, 0.5, 0);
+    this.uvPlane = new THREE.Mesh(plane, this.makeChannelMat());
+    this.uvScene.add(this.uvPlane);
+    const border = new THREE.LineSegments(
+      new THREE.EdgesGeometry(plane),
+      new THREE.LineBasicMaterial({ color: 0x6b6f78, depthTest: false }),
+    );
+    border.renderOrder = 2;
+    this.uvScene.add(border);
+    this.uvCamera.position.set(0, 0, 5);
+    this.uvControls = new OrbitControls(this.uvCamera, canvas);
+    this.uvControls.enableRotate = false;
+    this.uvControls.screenSpacePanning = true;
+    this.uvControls.zoomToCursor = true;
+    this.uvControls.mouseButtons = { LEFT: THREE.MOUSE.PAN, MIDDLE: THREE.MOUSE.PAN, RIGHT: THREE.MOUSE.PAN };
+    this.uvControls.enabled = false;
 
   }
 
@@ -118,16 +151,18 @@ export class Viewport {
     m.emissiveMap = t.emissive;
     m.needsUpdate = true;
     this.applyMode();
+    this.applyUVMode();
   }
 
   setMode(mode: ViewMode) {
     this.mode = mode;
     this.applyMode();
+    this.applyUVMode();
   }
 
   private makeChannelMat() {
     return new THREE.ShaderMaterial({
-      uniforms: { uTex: { value: null }, uMode: { value: 0 } },
+      uniforms: { uTex: { value: null }, uMode: { value: 0 }, uCov: { value: null }, uDim: { value: 0 } },
       vertexShader: `varying vec2 vUv; void main(){ vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
       fragmentShader: CHANNEL_VIEW_FRAG,
       side: THREE.DoubleSide,
@@ -162,6 +197,94 @@ export class Viewport {
       this.channelMats[i].uniforms.uMode.value = mode;
     });
     this.mesh.material = this.channelMats;
+  }
+
+  /** The camera that the user sees (and paints through). */
+  get activeCamera(): THREE.Camera {
+    return this.uvView ? this.uvCamera : this.camera;
+  }
+
+  setUVView(on: boolean) {
+    this.uvView = on;
+    this.controls.enabled = !on;
+    this.uvControls.enabled = on;
+    if (on) this.frameUV();
+    this.applyUVMode();
+  }
+
+  /** Shows texture set `set` in the UV view, with a wireframe of `geometry`'s UVs (its draw range). */
+  showUVSet(set: number, geometry: THREE.BufferGeometry) {
+    this.uvSet = set;
+    if (this.uvWire) {
+      this.uvScene.remove(this.uvWire);
+      this.uvWire.geometry.dispose();
+    }
+    const uv = geometry.attributes.uv as THREE.BufferAttribute;
+    const start = geometry.drawRange.start;
+    const count = Math.min(geometry.drawRange.count, uv.count - start);
+    const tris = Math.floor(count / 3);
+    const pos = new Float32Array(tris * 18);
+    let o = 0;
+    for (let t = 0; t < tris; t++) {
+      for (let e = 0; e < 3; e++) {
+        const a = start + t * 3 + e;
+        const b = start + t * 3 + ((e + 1) % 3);
+        pos[o++] = uv.getX(a);
+        pos[o++] = uv.getY(a);
+        pos[o++] = 0;
+        pos[o++] = uv.getX(b);
+        pos[o++] = uv.getY(b);
+        pos[o++] = 0;
+      }
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+    this.uvWire = new THREE.LineSegments(g, new THREE.LineBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.22, depthTest: false }));
+    this.uvWire.renderOrder = 1;
+    this.uvScene.add(this.uvWire);
+    this.applyUVMode();
+  }
+
+  set showUVWire(v: boolean) {
+    if (this.uvWire) this.uvWire.visible = v;
+  }
+
+  /** Fits the 0..1 UV square into the view. */
+  frameUV() {
+    this.uvCamera.zoom = 1;
+    this.uvControls.target.set(0.5, 0.5, 0);
+    this.uvCamera.position.set(0.5, 0.5, 5);
+    this.updateUVFrustum();
+    this.uvControls.update();
+  }
+
+  private updateUVFrustum() {
+    const c = this.canvas;
+    const aspect = (c.clientWidth || 1) / (c.clientHeight || 1);
+    const half = 0.56;
+    // Frustum around the camera position (OrbitControls pans by moving the camera).
+    this.uvCamera.left = -half * Math.max(aspect, 1);
+    this.uvCamera.right = half * Math.max(aspect, 1);
+    this.uvCamera.top = half / Math.min(aspect, 1);
+    this.uvCamera.bottom = -half / Math.min(aspect, 1);
+    this.uvCamera.updateProjectionMatrix();
+  }
+
+  private applyUVMode() {
+    const t = this.textures[this.uvSet];
+    const u = this.uvPlane.material.uniforms;
+    if (!t) return;
+    u.uCov.value = t.coverage;
+    u.uDim.value = 1;
+    if (this.mode === 'material') {
+      u.uTex.value = t.baseColor;
+      u.uMode.value = 0;
+    } else {
+      // applyMode has already picked the channel for this set's 3D material.
+      const ch = this.channelMats[this.uvSet];
+      u.uTex.value = ch?.uniforms.uTex.value ?? t.baseColor;
+      u.uMode.value = ch?.uniforms.uMode.value ?? 0;
+    }
   }
 
   setEnvironment(tex: THREE.Texture) {
@@ -230,12 +353,14 @@ export class Viewport {
     this.renderer.setSize(w, h, false);
     this.camera.aspect = w / h;
     this.camera.updateProjectionMatrix();
+    this.updateUVFrustum();
   }
 
   render() {
     const r = this.renderer;
     r.setRenderTarget(null);
     r.clear(true, true, true);
-    r.render(this.scene, this.camera);
+    if (this.uvView) r.render(this.uvScene, this.uvCamera);
+    else r.render(this.scene, this.camera);
   }
 }

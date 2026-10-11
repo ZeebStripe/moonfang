@@ -39,6 +39,8 @@ export interface TextureSet {
   info: TextureSetInfo;
   /** the set's triangles only (draw range over the shared mesh buffers) */
   geometry: THREE.BufferGeometry;
+  /** the same triangles laid out flat at their UVs (position = (u, v, 0)): what the 2D view paints on */
+  flat: THREE.BufferGeometry;
   texSize: number;
   layers: Layer[];
   selectedId: number | null;
@@ -73,6 +75,23 @@ export interface ProgressInfo {
 }
 
 const DEFAULT_VALUES: MaterialValues = { color: [0.5, 0.5, 0.5], roughness: 0.5, metallic: 0, height: 0.5 };
+
+/** Copy of a mesh laid out flat at its UVs: position = (u, v, 0), normal = +Z, uv kept. */
+function flattenToUV(g: THREE.BufferGeometry): THREE.BufferGeometry {
+  const uv = g.attributes.uv as THREE.BufferAttribute;
+  const pos = new Float32Array(uv.count * 3);
+  const nrm = new Float32Array(uv.count * 3);
+  for (let i = 0; i < uv.count; i++) {
+    pos[i * 3] = uv.getX(i);
+    pos[i * 3 + 1] = uv.getY(i);
+    nrm[i * 3 + 2] = 1;
+  }
+  const flat = new THREE.BufferGeometry();
+  flat.setAttribute('position', new THREE.BufferAttribute(pos, 3));
+  flat.setAttribute('normal', new THREE.BufferAttribute(nrm, 3));
+  flat.setAttribute('uv', uv);
+  return flat;
+}
 
 export class App {
   viewport: Viewport;
@@ -138,6 +157,7 @@ export class App {
     this.emptySet = {
       info: { name: '—', start: 0, count: 0 },
       geometry: new THREE.BufferGeometry(),
+      flat: new THREE.BufferGeometry(),
       texSize: 2048,
       layers: [],
       selectedId: null,
@@ -227,7 +247,8 @@ export class App {
     this.flushCommit();
     this.activeSet = i;
     const s = this.set;
-    this.painter.setUVGeometry(s.geometry);
+    this.bindPainterGeometry();
+    this.viewport.showUVSet(i, s.geometry);
     this.painter.setContext(s.maps, this.textures);
     this.painter.setTextureSize(s.texSize);
     if (this.viewport.mode === 'mask') s.dirty = true;
@@ -243,11 +264,15 @@ export class App {
     const geometry = new THREE.BufferGeometry();
     for (const [k, a] of Object.entries(mesh.geometry.attributes)) geometry.setAttribute(k, a);
     geometry.setDrawRange(info.start, info.count);
+    const flat = new THREE.BufferGeometry();
+    for (const [k, a] of Object.entries(this.flatGeometry!.attributes)) flat.setAttribute(k, a);
+    flat.setDrawRange(info.start, info.count);
     const compositor = new Compositor(this.renderer, this.fs);
     compositor.resize(size);
     return {
       info,
       geometry,
+      flat,
       texSize: size,
       layers: [],
       selectedId: null,
@@ -313,6 +338,7 @@ export class App {
       hp.dispose();
     }
     this.mesh = mesh;
+    this.flatGeometry = flattenToUV(mesh.geometry);
     this.viewport.setGeometry(mesh.geometry, mesh.sets.length);
     this.painter.setMesh(mesh.geometry);
     this.clearHistory();
@@ -369,6 +395,7 @@ export class App {
       orm: f.textures[1],
       normal: f.textures[2],
       emissive: f.textures[3],
+      coverage: s.maps.coverage.texture,
       meshA: s.maps.meshATex,
       meshB: s.maps.meshBTex,
       mask: s.compositor.maskPreview.texture,
@@ -412,6 +439,27 @@ export class App {
     await this.rebake([s]);
     this.emit('settings');
     this.emit('history');
+  }
+
+  // ---------------------------------------------------------------- 2D UV view
+  uvView = false;
+  private flatGeometry: THREE.BufferGeometry | null = null;
+
+  /** Switches between the 3D viewport and the 2D UV view (both paint). */
+  setUVView(on: boolean) {
+    if (this.painter.isPainting || on === this.uvView) return;
+    this.uvView = on;
+    this.viewport.setUVView(on);
+    this.bindPainterGeometry();
+    this.emit('view');
+  }
+
+  /** Strokes are projected onto the 3D mesh, or onto its flat UV layout in the 2D view. */
+  private bindPainterGeometry() {
+    const s = this.set;
+    if (!this.mesh) return;
+    this.painter.setMesh(this.uvView ? s.flat : this.mesh.geometry);
+    this.painter.setUVGeometry(this.uvView ? s.flat : s.geometry);
   }
 
   // ---------------------------------------------------------------- selection
@@ -815,7 +863,9 @@ export class App {
   beginStroke(): boolean {
     const l = this.selected;
     if (!l || this.paintBlockedReason()) return false;
-    return this.painter.beginStroke(l, this.part, this.viewport.camera, this.brush, this.tool === 'erase', {
+    // Mirror symmetry is a 3D notion; in the UV view it would mirror across the UV square.
+    const brush = this.uvView ? { ...this.brush, symmetry: 'off' as const } : this.brush;
+    return this.painter.beginStroke(l, this.part, this.viewport.activeCamera, brush, this.tool === 'erase', {
       tip: this.tipTexture(),
       stencil: this.textures.get(this.brush.stencil.imageId ?? undefined),
       dpr: this.renderer.getPixelRatio(),
