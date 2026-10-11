@@ -143,7 +143,7 @@ export function mountToolbar(app: App, root: HTMLElement) {
 }
 
 export function mountStatusbar(app: App, root: HTMLElement) {
-  const left = h('span', {}, 'LMB paint · Alt+LMB / MMB orbit · RMB pan · Wheel zoom · [ ] size · ? shortcuts');
+  const left = h('span', {}, 'LMB paint · Alt+LMB / MMB orbit · RMB pan · Wheel zoom · Ctrl+RMB drag brush size / hardness · ? shortcuts');
   const right = h('span', { class: 'dim' });
   root.append(left, h('div', { class: 'spacer' }), right);
   const gl = app.renderer.getContext();

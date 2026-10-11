@@ -162,3 +162,39 @@ export function stencilControls(app: App, rerender: () => void): HTMLElement[] {
     ),
   ];
 }
+
+/**
+ * X / Y / Z mirror toggles in the viewport's top-right corner (one axis at a time, like the brush panel's
+ * Symmetry field). Click the active axis again to turn symmetry off. Hidden in the 2D UV view, where it doesn't apply.
+ */
+export function mountSymmetryToggles(app: App, wrap: HTMLElement) {
+  const axes = ['x', 'y', 'z'] as const;
+  const buttons = axes.map((axis) =>
+    h(
+      'button',
+      {
+        class: `sym-btn sym-${axis}`,
+        title: `Mirror painting across the model's ${axis.toUpperCase()} axis`,
+        'aria-label': `Symmetry ${axis.toUpperCase()}`,
+        onclick: () => {
+          app.brush.symmetry = app.brush.symmetry === axis ? 'off' : axis;
+          app.emit('tool');
+          app.emit('brush');
+        },
+      },
+      axis.toUpperCase(),
+    ),
+  );
+  const box = h('div', { class: 'sym-toggles', title: 'Symmetry' }, h('span', { class: 'sym-label' }, 'Mirror'), ...buttons);
+  wrap.append(box);
+  const sync = () => {
+    box.style.display = app.mesh && !app.uvView ? '' : 'none';
+    axes.forEach((axis, i) => {
+      const on = app.brush.symmetry === axis;
+      buttons[i].classList.toggle('active', on);
+      buttons[i].setAttribute('aria-pressed', String(on));
+    });
+  };
+  app.on((k) => (k === 'brush' || k === 'tool' || k === 'view' || k === 'mesh') && sync());
+  sync();
+}

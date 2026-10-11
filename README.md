@@ -149,6 +149,7 @@ npm run build
 | Right mouse / Shift + Middle mouse | Pan |
 | Wheel | Zoom |
 | `B` / `E` | Paint / Erase |
+| Ctrl + Right mouse drag | Brush size (left/right) or hardness (up/down) |
 | `[` `]` | Brush size (with Shift: hardness) |
 | `X` | Swap the mask paint value (black/white) |
 | `S` (hold) | Stencil: drag to move, scroll to scale, Shift+scroll to rotate |

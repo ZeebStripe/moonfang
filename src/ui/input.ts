@@ -3,6 +3,7 @@ import type { Stamp } from '../engine/painter';
 import { VIEW_MODES } from '../engine/viewport';
 import { exportDialog, openMeshDialog, saveProjectAction } from './actions';
 import { saveVersionDialog } from './saves';
+import { h } from './dom';
 
 export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLElement) {
   const canvas = app.viewport.canvas;
@@ -120,7 +121,7 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
   });
 
   function updateCursor(e?: PointerEvent) {
-    const show = hover && !altDown && !!app.mesh;
+    const show = hover && !altDown && !!app.mesh && !resize;
     cursor.style.display = show ? 'block' : 'none';
     if (!e) return;
     const r = wrap.getBoundingClientRect();
@@ -128,6 +129,57 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
     Object.assign(cursor.style, { width: `${d}px`, height: `${d}px`, left: `${e.clientX - r.left - d / 2}px`, top: `${e.clientY - r.top - d / 2}px` });
     cursor.className = `brush-cursor ${app.tool} ${app.part === 'mask' ? 'mask' : ''}`;
   }
+
+  // ------------------------------------------------------------------ quick resize (Ctrl + right-drag)
+  // Left/right = size, up/down = hardness, locked to whichever direction the drag starts in.
+  const hud = h('div', { class: 'resize-hud' }, h('div', { class: 'resize-ring' }), h('div', { class: 'resize-core' }), h('div', { class: 'resize-label' }));
+  wrap.append(hud);
+  const [ring, core, label] = Array.from(hud.children) as HTMLElement[];
+  let resize: { id: number; x: number; y: number; size: number; hardness: number; axis: 'size' | 'hardness' | null } | null = null;
+  const showHud = () => {
+    const b = app.brush;
+    const d = b.size * 2;
+    Object.assign(ring.style, { width: `${d}px`, height: `${d}px` });
+    Object.assign(core.style, { width: `${d * b.hardness}px`, height: `${d * b.hardness}px` });
+    label.textContent = resize?.axis === 'hardness' ? `Hardness ${b.hardness.toFixed(2)}` : `Size ${b.size}`;
+  };
+  wrap.addEventListener(
+    'pointerdown',
+    (e) => {
+      if (e.button !== 2 || !e.ctrlKey || painting || resize || e.target !== canvas) return;
+      e.stopPropagation(); // no panning
+      e.preventDefault();
+      const r = wrap.getBoundingClientRect();
+      resize = { id: e.pointerId, x: e.clientX, y: e.clientY, size: app.brush.size, hardness: app.brush.hardness, axis: null };
+      Object.assign(hud.style, { display: 'block', left: `${e.clientX - r.left}px`, top: `${e.clientY - r.top}px` });
+      cursor.style.display = 'none';
+      canvas.setPointerCapture(e.pointerId);
+      showHud();
+    },
+    true,
+  );
+  canvas.addEventListener('pointermove', (e) => {
+    if (!resize || e.pointerId !== resize.id) return;
+    const dx = e.clientX - resize.x;
+    const dy = e.clientY - resize.y;
+    if (!resize.axis && Math.hypot(dx, dy) > 6) resize.axis = Math.abs(dx) >= Math.abs(dy) ? 'size' : 'hardness';
+    const b = app.brush;
+    // Size changes multiplicatively (fine control when small, fast when large); dragging up hardens.
+    if (resize.axis === 'size') b.size = Math.round(Math.min(400, Math.max(1, resize.size * Math.pow(2, dx / 150))));
+    if (resize.axis === 'hardness') b.hardness = +Math.min(1, Math.max(0, resize.hardness - dy / 250)).toFixed(2);
+    showHud();
+  });
+  const endResize = (e: PointerEvent) => {
+    if (!resize || e.pointerId !== resize.id) return;
+    resize = null;
+    hud.style.display = 'none';
+    if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+    app.emit('tool');
+    app.emit('brush');
+    updateCursor(e);
+  };
+  canvas.addEventListener('pointerup', endResize);
+  canvas.addEventListener('pointercancel', endResize);
 
   // Capture phase so a painting click never reaches OrbitControls.
   wrap.addEventListener(

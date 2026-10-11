@@ -303,6 +303,7 @@ export function shortcutsDialog() {
     ['Right mouse / Shift + Middle', 'Pan'],
     ['Wheel', 'Zoom'],
     ['B / E', 'Paint / Erase tool'],
+    ['Ctrl + Right mouse drag', 'Brush size (left/right) or hardness (up/down)'],
     ['[ and ]', 'Brush size'],
     ['Shift + [ and ]', 'Brush hardness'],
     ['X', 'Swap mask paint value (black/white)'],

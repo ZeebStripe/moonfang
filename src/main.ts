@@ -7,7 +7,7 @@ import { reportBug } from './ui/actions';
 import { checkForUpdates } from './ui/updates';
 import { installErrorCapture, onErrorRecorded } from './errors';
 import { bindViewportInput } from './ui/input';
-import { mountStencilOverlay } from './ui/brushUI';
+import { mountStencilOverlay, mountSymmetryToggles } from './ui/brushUI';
 import { mountLayersPanel } from './ui/layersPanel';
 import { mountPropsPanel } from './ui/propsPanel';
 import { mountShelf } from './ui/shelf';
@@ -51,6 +51,7 @@ async function boot() {
   mountDropZone(app, wrap);
   bindViewportInput(app, wrap, $('brush-cursor'));
   mountStencilOverlay(app, wrap);
+  mountSymmetryToggles(app, wrap);
 
   await deviceNotice();
   // Offer to restore the last autosave first; otherwise start with the demo mesh.
