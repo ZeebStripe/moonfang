@@ -66,7 +66,14 @@ server again when you close that window. The app window uses its own browser pro
 separate from a normal browser tab's.
 
 Alternatively, **`start.bat`** starts Moonfang and opens it in your browser (it installs the dependencies on
-first run), and **`stop.bat`** stops it. Or manually:
+first run), and **`stop.bat`** stops it.
+
+On Linux, run **`./create-shortcut.sh`** once. It adds Moonfang to the application menu (and the desktop) with
+the same behaviour: your default browser in an app-style window, server stopped on close. Snap and Flatpak browsers
+are supported. **`./start.sh`** and **`./stop.sh`** work like the Windows scripts. You need Node.js 20+ and a
+browser with WebGL2; on Linux Chrome, check `chrome://gpu` that WebGL is hardware accelerated.
+
+Or manually, on any system:
 
 ```bash
 npm install
