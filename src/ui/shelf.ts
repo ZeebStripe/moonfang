@@ -50,7 +50,22 @@ export function mountShelf(app: App, root: HTMLElement) {
     );
   });
   const grid = h('div', { class: 'shelf-grid' });
-  root.append(h('div', { class: 'shelf-head' }, tabs, hint, libBtn, search), grid);
+  // Decals tab: flat (colour only) or raised (with the decal's automatic relief), the decal tool's Height channel.
+  const flatBtn = h('button', { class: 'seg-btn', title: 'Decals print flat: colour only, no relief' }, 'Flat');
+  const raisedBtn = h('button', { class: 'seg-btn', title: 'Decals are raised: their automatic relief is painted into the height channel (depth in the decal properties)' }, 'Raised');
+  const decalRelief = h('div', { class: 'seg decal-relief', title: 'Flat or raised decals' }, flatBtn, raisedBtn);
+  const setRaised = (on: boolean) => {
+    app.decal.channels.height = on;
+    app.emit('brush');
+  };
+  flatBtn.addEventListener('click', () => setRaised(false));
+  raisedBtn.addEventListener('click', () => setRaised(true));
+  const syncRelief = () => {
+    decalRelief.style.display = tab === 'decals' ? '' : 'none';
+    flatBtn.classList.toggle('active', !app.decal.channels.height);
+    raisedBtn.classList.toggle('active', app.decal.channels.height);
+  };
+  root.append(h('div', { class: 'shelf-head' }, tabs, hint, decalRelief, libBtn, search), grid);
 
   function renderTabs() {
     const t = (id: ShelfTab, label: string) => h('button', { class: `tab ${tab === id ? 'active' : ''}`, onclick: () => ((tab = id), renderTabs(), renderGrid()) }, label);
@@ -62,6 +77,7 @@ export function mountShelf(app: App, root: HTMLElement) {
       masks: 'Click: apply to the selected layer’s mask',
       decals: 'Click: use with the decal tool · right-click for more',
     }[tab];
+    syncRelief();
   }
 
   function tile(label: string, preview: HTMLElement, onClick: () => void, extras: (HTMLElement | null)[] = [], title?: string, onMenu?: (e: MouseEvent) => void) {
@@ -225,6 +241,7 @@ export function mountShelf(app: App, root: HTMLElement) {
     if (k === 'tool') renderTabs();
     // The decal tab marks the decal in use.
     if ((k === 'tool' || k === 'brush') && tab === 'decals') later();
+    if (k === 'brush') syncRelief();
   });
   renderTabs();
   // Thumbnails need the environment map, which exists once the viewport is constructed.

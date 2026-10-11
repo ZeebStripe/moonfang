@@ -247,7 +247,7 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
               'div',
               { class: 'row wrap' },
               checkbox('Color', d.channels.color, (v) => (d.channels.color = v)),
-              checkbox('Height', d.channels.height, (v) => ((d.channels.height = v), render())),
+              checkbox('Height (raised)', d.channels.height, (v) => ((d.channels.height = v), app.emit('brush'))),
               checkbox('Roughness', d.channels.roughness, (v) => ((d.channels.roughness = v), render())),
               checkbox('Metallic', d.channels.metallic, (v) => ((d.channels.metallic = v), render())),
             ),
