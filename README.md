@@ -1,6 +1,7 @@
 # Moonfang 3D
 
-**Moonfang 3D** (Moonfang for short) is a free, open source 3D texture painting tool for game assets.
+**Moonfang 3D** (Moonfang for short) is a free, open source 3D texture painting tool for game assets: paint PBR
+materials straight onto your models, layer smart materials and masks, and export ready-to-use texture sets.
 It runs as a desktop app or in the browser (WebGL2) and is built with TypeScript and three.js.
 
 ![Moonfang 3D with the Rusty Iron smart material on a torus knot](docs/screenshots/hero.png)
