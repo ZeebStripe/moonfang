@@ -160,10 +160,13 @@ export function restoreLayers(renderer: THREE.WebGLRenderer, copier: Copier, p: 
     t.needsUpdate = true;
     return t;
   };
+  // Everything allocated so far, freed again if a later layer turns out to be corrupt.
+  const created: THREE.WebGLRenderTarget[] = [];
   const restore = (s: SerializedLayer): Layer => {
     let mask: LayerMask | null = null;
     if (s.mask) {
       const rt = createMaskRT(renderer, size, 1);
+      created.push(rt);
       const t = upload(s.mask.data);
       copier.copy(renderer, [t], rt);
       t.dispose();
@@ -172,6 +175,7 @@ export function restoreLayers(renderer: THREE.WebGLRenderer, copier: Copier, p: 
     bumpLayerId(s.id);
     if (s.kind === 'paint') {
       const rt = createPaintRT(size);
+      created.push(rt);
       // Before the emissive/opacity channels, target [2] held (height, heightA, 0, 1): clear what is now opacity.
       if (s.data.length < PAINT_TARGETS && p.files[s.data[2]]) {
         const d = p.files[s.data[2]].slice();
@@ -197,7 +201,12 @@ export function restoreLayers(renderer: THREE.WebGLRenderer, copier: Copier, p: 
     const { mask: _m, ...rest } = s;
     return { ...rest, maps: rest.maps ?? null, tiling: rest.tiling ?? 4, mask };
   };
-  const layers = serialized.map(restore);
-  renderer.setRenderTarget(null);
-  return layers;
+  try {
+    return serialized.map(restore);
+  } catch (e) {
+    created.forEach((rt) => rt.dispose());
+    throw e;
+  } finally {
+    renderer.setRenderTarget(null);
+  }
 }

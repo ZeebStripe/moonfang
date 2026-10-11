@@ -2,6 +2,7 @@ import type { App } from '../app';
 import type { Stamp } from '../engine/painter';
 import { VIEW_MODES } from '../engine/viewport';
 import { exportDialog, openMeshDialog, saveProjectAction } from './actions';
+import { saveVersionDialog } from './saves';
 
 export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLElement) {
   const canvas = app.viewport.canvas;
@@ -200,6 +201,7 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
     if (ctrl) {
       if (key === 'z' && !e.shiftKey) app.undo();
       else if ((key === 'z' && e.shiftKey) || key === 'y') app.redo();
+      else if (key === 's' && e.altKey) saveVersionDialog(app);
       else if (key === 's') saveProjectAction(app);
       else if (key === 'e') exportDialog(app);
       else if (key === 'o') void openMeshDialog(app);
@@ -278,5 +280,12 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
   });
   window.addEventListener('blur', () => {
     altDown = false;
+    // The S keyup is lost while another window has focus; a stuck stencil key would block painting.
+    if (stencilKey) {
+      stencilKey = false;
+      stencilDrag = null;
+      wrap.classList.remove('stencil-edit');
+      app.emit('brush');
+    }
   });
 }

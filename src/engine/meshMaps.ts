@@ -405,6 +405,23 @@ export class MeshMaps {
     return this.maps.textures[3];
   }
 
+  /**
+   * Replaces whatever a failed bake left behind with neutral maps (full coverage, flat normals, no AO), so
+   * compositing and painting keep working until the next successful bake.
+   */
+  placeholder(size: number) {
+    const r = this.renderer;
+    this.dispose();
+    this.size = size;
+    this.coverage = createRT(size, size);
+    clearTarget(r, this.coverage, 1, 1, 1, 1);
+    this.seeds = createRT(size, size, { type: THREE.FloatType });
+    clearTarget(r, this.seeds, 0, 0, 0, 0);
+    this.maps = createRT(size, size, { type: THREE.HalfFloatType, count: 4, linear: true });
+    clearTarget(r, this.maps, 0.5, 0.5, 0.5, 1);
+    r.setRenderTarget(null);
+  }
+
   dispose() {
     if (!this.size) return;
     this.coverage?.dispose();

@@ -1,9 +1,11 @@
 import type { App } from '../app';
-import { downloadBlob, EXPORT_FORMATS, EXPORT_PRESETS, type ExportFormat } from '../engine/exporter';
+import { downloadBlob, EXPORT_FORMATS, EXPORT_PRESETS, exportPrefixes, type ExportFormat } from '../engine/exporter';
 import { walkLayers } from '../engine/layers';
 import { loadDemoMesh, loadMeshFile, type DemoMeshId } from '../engine/meshLoader';
 import { checkbox, h, pickFile, pickFiles, selectField, slider } from './dom';
 import { ICONS } from './icons';
+import { bugReportUrl, KOFI_URL, REPO_URL, VERSION_LABEL } from '../meta';
+import { errorLog } from '../errors';
 
 export function errorMessage(e: unknown) {
   return e instanceof Error ? e.message : String(e);
@@ -94,8 +96,16 @@ export function openModal(title: string, body: HTMLElement, footer: HTMLElement[
   return close;
 }
 
+/** Toasts and returns true while a bake, load or stroke is running (actions should wait for it). */
+export function busyWarning(app: App): boolean {
+  if (!app.busy && !app.painter.isPainting) return false;
+  app.toast('Wait for the current operation to finish.', 'warn');
+  return true;
+}
+
 export function exportDialog(app: App) {
   if (!app.mesh) return app.toast('Load a mesh first.', 'warn');
+  if (busyWarning(app)) return;
   let preset = EXPORT_PRESETS[1];
   let normal: 'opengl' | 'directx' = preset.normal;
   let baseName = safeName(app.mesh.name);
@@ -110,7 +120,7 @@ export function exportDialog(app: App) {
     const ext = format === 'exr' ? 'exr' : 'png';
     const sizes = app.sets.map((s) => `${app.sets.length > 1 ? `${s.info.name}: ` : ''}${s.texSize}×${s.texSize}`).join(' · ');
     info.textContent = `${sizes} — ${EXPORT_FORMATS.find((f) => f[0] === format)![1]}, UV padding applied.`;
-    const prefixes = app.sets.length > 1 ? app.sets.map((s) => `${baseName}_${safeName(s.info.name)}`) : [baseName];
+    const prefixes = exportPrefixes(baseName, app.sets.map((s) => s.info.name));
     mapsList.replaceChildren(
       ...prefixes.flatMap((pre) =>
         preset.maps.map((m) =>
@@ -156,6 +166,7 @@ export function exportDialog(app: App) {
   const doGlb = h('button', { class: 'btn' }, 'Export Textured GLB');
   const close = openModal('Export', body, [doGlb, doTextures]);
   doTextures.addEventListener('click', async () => {
+    if (busyWarning(app)) return;
     try {
       const zip = await app.exporter.exportTextures(exportSets(app), app.mesh!, { preset, normal, baseName, format });
       downloadBlob(zip as BlobPart, `${baseName}_textures.zip`, 'application/zip');
@@ -166,6 +177,7 @@ export function exportDialog(app: App) {
     }
   });
   doGlb.addEventListener('click', async () => {
+    if (busyWarning(app)) return;
     try {
       const glb = await app.exporter.exportGLB(exportSets(app), app.mesh!);
       downloadBlob(glb, `${baseName}.glb`, 'model/gltf-binary');
@@ -183,6 +195,7 @@ function exportSets(app: App) {
 
 export function bakeDialog(app: App) {
   if (!app.mesh) return app.toast('Load a mesh first.', 'warn');
+  if (busyWarning(app)) return;
   const s = { ...app.bake };
   const hpLabel = h('span', { class: 'hp-name' });
   const hpRemove = h('button', { class: 'btn small' }, 'Remove');
@@ -215,6 +228,7 @@ export function bakeDialog(app: App) {
     cage.style.display = hp ? '' : 'none';
   };
   hpLoad.addEventListener('click', async () => {
+    if (busyWarning(app)) return;
     const file = await pickFile('.glb,.gltf,.obj,.fbx');
     if (!file) return;
     hpLabel.textContent = `Loading ${file.name}…`;
@@ -226,6 +240,7 @@ export function bakeDialog(app: App) {
     showHighPoly();
   });
   hpRemove.addEventListener('click', async () => {
+    if (busyWarning(app)) return;
     await app.setHighPoly(null);
     showHighPoly();
   });
@@ -265,10 +280,10 @@ export function bakeDialog(app: App) {
   const go = h('button', { class: 'btn primary' }, 'Bake');
   const close = openModal('Bake Mesh Maps', body, [go]);
   go.addEventListener('click', async () => {
+    if (busyWarning(app)) return;
     close();
     app.bake = s;
-    await app.rebake();
-    app.toast('Mesh maps baked');
+    if (await app.rebake()) app.toast('Mesh maps baked');
   });
 }
 
@@ -290,7 +305,8 @@ export function shortcutsDialog() {
     ['Ctrl + Z / Ctrl + Shift + Z', 'Undo / Redo'],
     ['Ctrl + G', 'Put the selected layer in a new folder'],
     ['Ctrl + O', 'Open mesh'],
-    ['Ctrl + S', 'Save project'],
+    ['Ctrl + S', 'Save project (download .mfp)'],
+    ['Ctrl + Alt + S', 'Save version (iterative save)'],
     ['Ctrl + E', 'Export'],
   ];
   openModal(
@@ -305,6 +321,7 @@ export function aboutDialog() {
     h(
       'div',
       { class: 'form' },
+      h('p', {}, h('strong', {}, `Moonfang ${VERSION_LABEL}`)),
       h('p', {}, 'Moonfang is a free, open source (MIT) 3D texture painting tool for game assets.'),
       h(
         'ul',
@@ -315,9 +332,20 @@ export function aboutDialog() {
         h('li', {}, 'Procedural smart masks and smart materials'),
         h('li', {}, 'Export to Unreal, Unity, Godot/glTF or textured GLB'),
       ),
-      h('p', { class: 'dim small' }, 'Built with three.js and WebGL2.'),
+      h('p', { class: 'dim small' }, 'Built with three.js, three-mesh-bvh and fflate (MIT; see THIRD_PARTY_NOTICES.md).'),
+      h('p', { class: 'dim small' }, 'Your work never leaves your computer: no accounts, no uploads, no analytics. The only network request is the update check.'),
+      h('p', {}, h('a', { href: REPO_URL, target: '_blank', rel: 'noopener' }, 'Source code on GitHub'), ' · ', h('a', { href: KOFI_URL, target: '_blank', rel: 'noopener' }, 'Support on Ko-fi')),
     ),
   );
+}
+
+/** Opens the GitHub bug form with version, browser and GPU filled in. */
+export function reportBug(app: App) {
+  window.open(bugReportUrl(app.renderer.getContext(), errorLog()), '_blank', 'noopener');
+}
+
+export function openKofi() {
+  window.open(KOFI_URL, '_blank', 'noopener');
 }
 
 export function displaySettings(app: App): HTMLElement {

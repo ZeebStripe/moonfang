@@ -4,6 +4,7 @@ import { VIEW_MODES, type ViewMode } from '../engine/viewport';
 import {
   aboutDialog,
   bakeDialog,
+  busyWarning,
   exportDialog,
   importLibraryAction,
   importTextureSetAction,
@@ -11,12 +12,18 @@ import {
   openMeshDialog,
   openMeshFile,
   openProjectDialog,
+  openKofi,
+  openModal,
   openProjectFile,
+  reportBug,
   saveProjectAction,
   shortcutsDialog,
 } from './actions';
 import { h, icon, iconButton, selectField } from './dom';
 import { ICONS } from './icons';
+import { savesDialog, saveVersionDialog } from './saves';
+import { checkForUpdates } from './updates';
+import { VERSION_LABEL } from '../meta';
 
 type MenuItem = { label: string; action: () => void; shortcut?: string } | 'sep' | { heading: string };
 
@@ -64,6 +71,7 @@ export function mountTopbar(app: App, root: HTMLElement) {
     );
     resSelect.replaceChildren(
       selectField('Texture', [[512, '512'], [1024, '1024'], [2048, '2048'], [4096, '4096']] as const, app.texSize, async (v) => {
+        if (busyWarning(app)) return renderSelects();
         if (v === 4096 && !confirm('4096² uses a lot of GPU memory (~1 GB with undo history). Continue?')) return renderSelects();
         await app.setResolution(v);
       }),
@@ -73,7 +81,7 @@ export function mountTopbar(app: App, root: HTMLElement) {
   renderSelects();
 
   root.append(
-    h('div', { class: 'brand' }, h('span', { class: 'logo' }), 'Moonfang'),
+    h('div', { class: 'brand' }, h('span', { class: 'logo' }), 'Moonfang', h('span', { class: 'version-badge', title: 'Public beta — please report bugs (Help → Report a Bug)' }, VERSION_LABEL)),
     menu('File', () => [
       { label: 'Open Mesh…', action: () => void openMeshDialog(app), shortcut: 'Ctrl+O' },
       { heading: 'Demo meshes' },
@@ -81,6 +89,8 @@ export function mountTopbar(app: App, root: HTMLElement) {
       'sep',
       { label: 'Open Project…', action: () => void openProjectDialog(app) },
       { label: 'Save Project', action: () => saveProjectAction(app), shortcut: 'Ctrl+S' },
+      { label: 'Save Version…', action: () => saveVersionDialog(app), shortcut: 'Ctrl+Alt+S' },
+      { label: 'Saved Versions…', action: () => savesDialog(app) },
       'sep',
       { label: 'Export…', action: () => exportDialog(app), shortcut: 'Ctrl+E' },
     ]),
@@ -96,8 +106,13 @@ export function mountTopbar(app: App, root: HTMLElement) {
       { label: 'Frame Model', action: () => app.viewport.frame(), shortcut: 'F' },
     ]),
     menu('Help', () => [
-      { label: 'Shortcuts', action: () => shortcutsDialog() },
-      { label: 'About', action: () => aboutDialog() },
+      { label: 'Shortcuts', action: () => shortcutsDialog(), shortcut: '?' },
+      'sep',
+      { label: 'Report a Bug…', action: () => reportBug(app) },
+      { label: 'Check for Updates…', action: () => void checkForUpdates(app, true) },
+      { label: 'Support Moonfang on Ko-fi ♥', action: () => openKofi() },
+      'sep',
+      { label: `About Moonfang (${VERSION_LABEL})`, action: () => aboutDialog() },
     ]),
     h('div', { class: 'spacer' }),
     resSelect,
@@ -149,11 +164,13 @@ export function mountStatusbar(app: App, root: HTMLElement) {
 export function mountToasts(app: App) {
   const box = h('div', { class: 'toasts', role: 'status', 'aria-live': 'polite' });
   document.body.append(box);
-  app.onToast((msg, kind) => {
-    const t = h('div', { class: `toast ${kind}` }, msg);
+  app.onToast((msg, kind, action) => {
+    const btn = action ? h('button', { class: 'btn small', onclick: () => (action.run(), t.remove()) }, action.label) : null;
+    const t = h('div', { class: `toast ${kind}${action ? ' has-action' : ''}` }, h('span', {}, msg), btn);
     box.append(t);
-    setTimeout(() => t.classList.add('out'), kind === 'info' ? 2600 : 6000);
-    setTimeout(() => t.remove(), kind === 'info' ? 3000 : 6400);
+    const life = action ? 12000 : kind === 'info' ? 2600 : 6000;
+    setTimeout(() => t.classList.add('out'), life);
+    setTimeout(() => t.remove(), life + 400);
   });
 }
 
@@ -207,5 +224,56 @@ export function mountDropZone(app: App, target: HTMLElement) {
       await app.viewport.loadHDR(file);
       app.toast(`Environment: ${file.name}`);
     } else await openMeshFile(app, file);
+  });
+}
+
+/** After a GPU driver reset every layer texture is gone: explain, and offer a reload into the autosave prompt. */
+export function mountGpuLossDialog(app: App) {
+  app.on((k) => {
+    if (k !== 'gpu') return;
+    const when = app.lastAutosave ? new Date(app.lastAutosave).toLocaleTimeString() : null;
+    const reload = h('button', { class: 'btn primary', onclick: () => location.reload() }, 'Reload Moonfang');
+    openModal(
+      'The graphics driver reset',
+      h(
+        'div',
+        { class: 'form' },
+        h('p', {}, 'The GPU stopped responding (usually a very heavy bake or texture size for this graphics card) and the painted layers were lost from video memory.'),
+        h(
+          'p',
+          {},
+          when
+            ? `Reload Moonfang and choose Restore to continue from the autosave made at ${when}. Changes since then are lost.`
+            : 'Reload Moonfang to continue. Earlier autosaves and versions are under File → Saved Versions.',
+        ),
+        h('p', { class: 'dim small' }, 'If this keeps happening, try a smaller texture size or fewer AO samples, and please report it (Help → Report a Bug).'),
+      ),
+      [reload],
+    );
+  });
+}
+
+/**
+ * Phones and tablets: Moonfang needs a mouse or pen and a large screen. Resolves once the user continues anyway
+ * (immediately on desktop).
+ */
+export function deviceNotice(): Promise<void> {
+  const touchOnly = matchMedia('(pointer: coarse)').matches && !matchMedia('(any-pointer: fine)').matches;
+  // A hidden or headless window can report a 0×0 screen; only real small screens count.
+  const tiny = screen.width > 0 && Math.min(screen.width, screen.height) < 600;
+  if (!touchOnly && !tiny) return Promise.resolve();
+  return new Promise((resolve) => {
+    const go = h('button', { class: 'btn' }, 'Continue anyway');
+    const close = openModal(
+      'Desktop app',
+      h(
+        'div',
+        { class: 'form' },
+        h('p', {}, 'Moonfang is made for a desktop or laptop with a mouse or pen tablet. On phones and touch-only tablets the layout and painting controls won’t work properly.'),
+      ),
+      [go],
+      () => resolve(),
+    );
+    go.addEventListener('click', () => close());
   });
 }

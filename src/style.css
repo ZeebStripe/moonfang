@@ -1134,3 +1134,59 @@ table.shortcuts td {
   background: var(--accent);
   color: #fff;
 }
+
+/* ------------------------------------------------------------ beta badge, saved versions */
+.version-badge {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: 9px;
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.modal a {
+  color: var(--accent);
+}
+.saves-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 52vh;
+  overflow-y: auto;
+}
+.save-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  border: 1px solid var(--line-soft);
+  border-radius: var(--radius);
+  background: var(--panel-2);
+}
+.save-row.version {
+  border-left: 3px solid var(--accent);
+}
+.save-info {
+  flex: 1;
+  min-width: 0;
+}
+.save-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.toast.has-action {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  pointer-events: auto;
+}
+.update-notes {
+  max-height: 220px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  padding: 8px;
+  border-radius: var(--radius);
+  background: var(--panel-2);
+}

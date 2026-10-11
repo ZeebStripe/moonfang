@@ -1,0 +1,58 @@
+name: Bug report
+description: Something in Moonfang doesn't work or looks wrong.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for testing the Moonfang beta! **Help → Report a Bug** in the app fills in the version and system fields for you.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: What did you do, what did you expect, and what happened instead?
+      placeholder: "I added the Rusty Iron smart material to a 4096 texture set and the viewport turned black…"
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      placeholder: |
+        1. Open the Vase demo mesh
+        2. …
+  - type: textarea
+    id: attachments
+    attributes:
+      label: Screenshots, model or project file
+      description: Drag files in here. A small .mfp project (File → Save Project) or the model that causes the problem helps a lot. Only attach files you are allowed to share — issues are public.
+  - type: input
+    id: version
+    attributes:
+      label: Moonfang version
+      description: Help → About Moonfang
+      placeholder: Beta 0.1.0
+    validations:
+      required: true
+  - type: dropdown
+    id: edition
+    attributes:
+      label: How do you run Moonfang?
+      options:
+        - Desktop app (Windows)
+        - Desktop app (Linux)
+        - In a web browser (from source / start.bat)
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: System
+      description: Browser / OS and graphics card (filled in automatically from Help → Report a Bug).
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Error details
+      description: Errors Moonfang recorded in this session (filled in automatically from Help → Report a Bug). Check them for anything you don't want to share, such as file names.
+      render: text

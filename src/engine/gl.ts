@@ -183,6 +183,7 @@ export function readRGBA8(renderer: THREE.WebGLRenderer, rt: THREE.WebGLRenderTa
 
 /** Shared GLSL: hashing, value noise, fbm and color helpers. */
 export const GLSL_NOISE = /* glsl */ `
+// Value noise; the hash follows Inigo Quilez's 3D value noise.
 float hash31(vec3 p) {
   p = fract(p * 0.3183099 + vec3(0.71, 0.113, 0.419));
   p *= 17.0;

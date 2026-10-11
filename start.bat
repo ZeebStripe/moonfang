@@ -14,6 +14,8 @@ where npm >nul 2>nul || (
 
 if not exist node_modules (
   echo Installing dependencies, this takes a minute the first time...
+  rem The browser version doesn't need the Electron runtime (~100 MB).
+  set ELECTRON_SKIP_BINARY_DOWNLOAD=1
   call npm install || ( echo npm install failed. & pause & exit /b 1 )
 )
 

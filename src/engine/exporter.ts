@@ -130,6 +130,19 @@ export interface ExportSet {
 
 const fileSafe = (s: string) => s.replace(/[^\w\-]+/g, '_').replace(/^_+|_+$/g, '') || 'set';
 
+/** File-name prefix per texture set; set names that sanitise to the same string get _2, _3 … so no files overwrite. */
+export function exportPrefixes(baseName: string, setNames: string[]): string[] {
+  if (setNames.length === 1) return [baseName];
+  const used = new Set<string>();
+  return setNames.map((n) => {
+    const stem = `${baseName}_${fileSafe(n)}`;
+    let p = stem;
+    for (let i = 2; used.has(p.toLowerCase()); i++) p = `${stem}_${i}`;
+    used.add(p.toLowerCase());
+    return p;
+  });
+}
+
 export type ExportFormat = 'png8' | 'png16' | 'exr';
 export const EXPORT_FORMATS: [ExportFormat, string][] = [
   ['png8', 'PNG 8-bit'],
@@ -188,14 +201,11 @@ export class Exporter {
     return buf;
   }
 
-  /** Returns a zip containing one PNG per map of the preset. */
-  /** One zip for all texture sets; with several sets the set name goes into each file name. */
+  /** One zip with one image per map of the preset and texture set; with several sets the set name goes into each file name. */
   async exportTextures(sets: ExportSet[], mesh: PaintMesh, o: ExportOptions): Promise<Uint8Array> {
     const files: Record<string, Uint8Array> = {};
-    for (const set of sets) {
-      const prefix = sets.length > 1 ? `${o.baseName}_${fileSafe(set.name)}` : o.baseName;
-      Object.assign(files, await this.exportSet(set.final, mesh, o, prefix));
-    }
+    const prefixes = exportPrefixes(o.baseName, sets.map((s) => s.name));
+    for (const [i, set] of sets.entries()) Object.assign(files, await this.exportSet(set.final, mesh, o, prefixes[i]));
     return zipSync(files, { level: 0 });
   }
 
@@ -233,8 +243,7 @@ export class Exporter {
     return files;
   }
 
-  /** Exports the mesh in its original placement with the painted material as a binary glTF. */
-  /** Exports the mesh with one material per texture set (geometry groups map to glTF primitives). */
+  /** Exports the mesh in its original placement as a binary glTF, one material per texture set (geometry groups map to glTF primitives). */
   async exportGLB(sets: ExportSet[], mesh: PaintMesh): Promise<ArrayBuffer> {
     const materials = sets.map((s) => this.glbMaterial(s.final, `${mesh.name}_${s.name}`));
     const geometry = mesh.geometry.clone();

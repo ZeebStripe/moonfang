@@ -32,7 +32,7 @@ import { importTextureSet, Library, makeAsset, mapTextureIds, TextureStore } fro
 import { builtinTipTexture, importTipImage } from './engine/brushTips';
 
 export type Tool = 'paint' | 'erase';
-export type ChangeKind = 'layers' | 'selection' | 'brush' | 'mesh' | 'view' | 'history' | 'settings' | 'tool' | 'autosave' | 'stencil' | 'set';
+export type ChangeKind = 'layers' | 'selection' | 'brush' | 'mesh' | 'view' | 'history' | 'settings' | 'tool' | 'autosave' | 'stencil' | 'set' | 'gpu';
 
 /** One material of the mesh with its own layer stack, resolution, baked maps and composited textures. */
 export interface TextureSet {
@@ -52,9 +52,18 @@ export interface TextureSet {
   committed: TreeState;
 }
 
-/** History limits: total steps, and steps holding full layer textures (strokes/fills). */
+/**
+ * History limits: total steps, steps holding full layer textures (strokes/fills), and the GPU memory those
+ * texture snapshots may use (a 4096² paint layer snapshot alone is 320 MB, so big sets keep fewer steps).
+ */
 const HISTORY_LIMIT = 80;
 const PIXEL_HISTORY_LIMIT = 24;
+const PIXEL_HISTORY_BYTES = 1024 ** 3;
+
+/** GPU memory of a stroke snapshot (RGBA8 per render target). */
+function pixelEntryBytes(e: HistoryEntry<TextureSet>): number {
+  return e.kind === 'pixels' ? e.entry.rt.width * e.entry.rt.height * 4 * e.entry.rt.textures.length : 0;
+}
 
 const DEFAULT_BRUSH_EXTRAS = {
   symmetry: 'off' as const,
@@ -67,6 +76,11 @@ const DEFAULT_BRUSH_EXTRAS = {
   opacityJitter: 0,
   smoothing: 0,
 };
+
+export interface ToastAction {
+  label: string;
+  run: () => void;
+}
 
 export interface ProgressInfo {
   active: boolean;
@@ -145,15 +159,19 @@ export class App {
   private pendingStamps: Stamp[] = [];
   private listeners = new Set<(k: ChangeKind) => void>();
   private progressListeners = new Set<(p: ProgressInfo) => void>();
-  private toastListeners = new Set<(msg: string, kind: 'info' | 'warn' | 'error') => void>();
+  private toastListeners = new Set<(msg: string, kind: 'info' | 'warn' | 'error', action?: ToastAction) => void>();
 
   constructor(canvas: HTMLCanvasElement) {
     this.viewport = new Viewport(canvas);
     this.renderer = this.viewport.renderer;
-    // GPU-side textures are gone after a context loss; the last autosave is the way back.
-    canvas.addEventListener('webglcontextlost', () =>
-      this.toast('The GPU driver reset the 3D context. Reload the page and restore the last autosave.', 'error'),
-    );
+    // GPU-side textures (every layer) are gone after a context loss; the last autosave is the way back (see the
+    // 'gpu' dialog). Autosave stops so the good snapshots aren't overwritten with blank readbacks.
+    canvas.addEventListener('webglcontextlost', (e) => {
+      e.preventDefault();
+      if (this.contextLost) return;
+      this.contextLost = true;
+      this.emit('gpu');
+    });
     this.emptySet = {
       info: { name: '—', start: 0, count: 0 },
       geometry: new THREE.BufferGeometry(),
@@ -187,14 +205,15 @@ export class App {
   onProgress(fn: (p: ProgressInfo) => void) {
     this.progressListeners.add(fn);
   }
-  onToast(fn: (msg: string, kind: 'info' | 'warn' | 'error') => void) {
+  onToast(fn: (msg: string, kind: 'info' | 'warn' | 'error', action?: ToastAction) => void) {
     this.toastListeners.add(fn);
   }
   emit(k: ChangeKind) {
     for (const fn of this.listeners) fn(k);
   }
-  toast(msg: string, kind: 'info' | 'warn' | 'error' = 'info') {
-    for (const fn of this.toastListeners) fn(msg, kind);
+  /** `action` adds a button to the toast (and keeps it up longer). */
+  toast(msg: string, kind: 'info' | 'warn' | 'error' = 'info', action?: ToastAction) {
+    for (const fn of this.toastListeners) fn(msg, kind, action);
   }
   private setProgress(active: boolean, label = '', value = 0) {
     this.progress = { active, label, value };
@@ -295,6 +314,8 @@ export class App {
 
   /** Bumped on every change to the document; autosave compares against it. */
   revision = 0;
+  /** The WebGL context was lost: the document's GPU data is gone until the app is reloaded. */
+  contextLost = false;
   lastAutosave = 0;
 
   get busy() {
@@ -322,22 +343,23 @@ export class App {
   // ---------------------------------------------------------------- mesh & baking
   /**
    * @param layers 'reset' = fresh default stacks, 'keep' = keep the current stacks if the set count matches
-   *               (UVs are assumed unchanged), 'empty' = leave stacks empty (project loading fills them)
+   *               (UVs are assumed unchanged), or one ready-made stack per set (project loading; null = default stack)
    * @param sizes  texture resolution per set (defaults to the previous size or 2048)
    */
-  async openMesh(mesh: PaintMesh, layers: 'reset' | 'keep' | 'empty' = 'reset', sizes?: number[]) {
+  async openMesh(mesh: PaintMesh, layers: 'reset' | 'keep' | (Layer[] | null)[] = 'reset', sizes?: number[]) {
     this.ready = false;
     const old = this.sets;
     const keep = layers === 'keep' && old.length === mesh.sets.length;
     if (layers === 'keep' && !keep) this.toast('The new mesh has a different number of texture sets — starting fresh layer stacks.', 'warn');
     // The high poly belongs to the model: refit it when the same model is reloaded, drop it for a new one.
-    if (this.highPoly && layers !== 'empty') {
+    if (this.highPoly && typeof layers === 'string') {
       const hp = this.highPoly;
       this.highPoly = null;
       if (layers === 'keep') this.highPoly = await hp.refit(mesh).catch(() => null);
       hp.dispose();
     }
-    if (this.mesh && this.mesh !== mesh) disposeMeshEdges(this.mesh);
+    const oldMesh = this.mesh;
+    const oldFlat = this.flatGeometry;
     this.mesh = mesh;
     this.flatGeometry = flattenToUV(mesh.geometry);
     this.viewport.setGeometry(mesh.geometry, mesh.sets.length);
@@ -352,10 +374,29 @@ export class App {
       s.maps.dispose();
       s.compositor.dispose();
     }
+    // Free the previous GPU buffers. The set views and UV layouts share attributes with their mesh; should one of
+    // those still be in use (same mesh reopened), three.js simply uploads it again on the next draw.
+    for (const s of old) {
+      s.geometry.dispose();
+      s.flat.dispose();
+    }
+    oldFlat?.dispose();
+    if (oldMesh && oldMesh !== mesh) {
+      disposeMeshEdges(oldMesh);
+      oldMesh.geometry.dispose();
+    }
     this.activeSet = 0;
     this.activateSet(0);
     await this.rebake();
-    if (layers === 'reset' || (layers === 'keep' && !keep)) this.sets.forEach((s) => this.defaultLayers(s));
+    if (Array.isArray(layers)) {
+      this.sets.forEach((s, i) => {
+        const stack = layers[i];
+        if (!stack) return this.defaultLayers(s);
+        s.layers = stack;
+        s.selectedId = stack[stack.length - 1]?.id ?? null;
+        s.part = 'content';
+      });
+    } else if (layers === 'reset' || !keep) this.sets.forEach((s) => this.defaultLayers(s));
     this.rebaseline();
     for (const w of mesh.warnings) this.toast(w, 'warn');
     this.emit('mesh');
@@ -364,11 +405,16 @@ export class App {
     this.emit('selection');
   }
 
-  /** Bakes mesh maps for the given sets (default: all). */
-  async rebake(sets: TextureSet[] = this.sets) {
-    if (!this.mesh) return;
+  /**
+   * Bakes mesh maps for the given sets (default: all). Returns false when the bake failed; the app stays usable
+   * (with whatever maps were baked) instead of freezing.
+   */
+  async rebake(sets: TextureSet[] = this.sets): Promise<boolean> {
+    if (!this.mesh || this.busy || this.painter.isPainting) return false;
     this.ready = false;
     this.setProgress(true, 'Baking mesh maps', 0);
+    let ok = true;
+    let done = 0;
     try {
       for (const [n, s] of sets.entries()) {
         const prefix = this.sets.length > 1 ? `${s.info.name} — ` : '';
@@ -381,12 +427,23 @@ export class App {
           this.highPoly,
         );
         this.bindViewportTextures(s);
+        done++;
+      }
+    } catch (e) {
+      ok = false;
+      console.error('Bake failed', e);
+      this.toast(`Baking mesh maps failed: ${e instanceof Error ? e.message : String(e)}`, 'error');
+      // The failed set has half-built maps; sets the bake didn't reach may have none (or the wrong size).
+      for (const [n, s] of sets.entries()) {
+        if (n === done || s.maps.size !== s.texSize) s.maps.placeholder(s.texSize);
+        this.bindViewportTextures(s);
       }
     } finally {
       this.setProgress(false);
     }
     this.ready = true;
     this.invalidate(true);
+    return ok;
   }
 
   private bindViewportTextures(s: TextureSet) {
@@ -405,7 +462,7 @@ export class App {
 
   /** Loads (or with null, removes) the high-poly reference mesh. Does not rebake. */
   async setHighPoly(file: { name: string; bytes: ArrayBuffer } | null) {
-    if (!this.mesh) return;
+    if (!this.mesh || this.busy) return;
     const next = file ? await HighPoly.load(file.name, file.bytes, this.mesh) : null;
     this.highPoly?.dispose();
     this.highPoly = next;
@@ -415,7 +472,7 @@ export class App {
   /** Changes the active texture set's resolution, resampling its layers. */
   async setResolution(size: number) {
     const s = this.set;
-    if (size === s.texSize || !this.mesh) return;
+    if (size === s.texSize || !this.mesh || this.busy || this.painter.isPainting) return;
     const r = this.renderer;
     for (const l of walkLayers(s.layers)) {
       if (l.kind === 'paint') {
@@ -839,13 +896,15 @@ export class App {
     this.toast('Stencil loaded — hold S and drag to move, wheel to scale, Shift+wheel to rotate');
   }
 
-  /** Texture ids referenced by the current layers and brush (embedded in project files). */
+  /** Texture ids referenced by every texture set's layers and the brush (embedded in project files). */
   usedTextureIds(): string[] {
     const ids = new Set<string>(mapTextureIds(this.brush.maps));
     if (this.brush.stencil.imageId) ids.add(this.brush.stencil.imageId);
     const tip = this.library.tips.find((t) => t.id === this.brush.tip);
     if (tip) ids.add(tip.assetId);
-    for (const l of walkLayers(this.layers)) if (l.kind === 'fill') mapTextureIds(l.maps).forEach((i) => ids.add(i));
+    for (const s of this.sets) {
+      for (const l of walkLayers(s.layers)) if (l.kind === 'fill') mapTextureIds(l.maps).forEach((i) => ids.add(i));
+    }
     return [...ids];
   }
 
@@ -948,10 +1007,20 @@ export class App {
     this.undoStack.push(e);
     const dropped = this.redoStack;
     this.redoStack = [];
-    let pixels = this.undoStack.filter((x) => x.kind === 'pixels').length;
-    while (this.undoStack.length > HISTORY_LIMIT || pixels > PIXEL_HISTORY_LIMIT) {
+    let pixels = 0;
+    let bytes = 0;
+    for (const x of this.undoStack) {
+      if (x.kind === 'pixels') pixels++;
+      bytes += pixelEntryBytes(x);
+    }
+    // The newest step is always kept, even if it alone is over the memory budget.
+    while (
+      this.undoStack.length > 1 &&
+      (this.undoStack.length > HISTORY_LIMIT || pixels > PIXEL_HISTORY_LIMIT || bytes > PIXEL_HISTORY_BYTES)
+    ) {
       const d = this.undoStack.shift()!;
       if (d.kind === 'pixels') pixels--;
+      bytes -= pixelEntryBytes(d);
       dropped.push(d);
     }
     this.dropEntries(dropped);
@@ -1073,6 +1142,16 @@ export class App {
     } finally {
       this.setProgress(false);
     }
+    // Rebuild every layer before touching the open document, so a corrupt file leaves the current work intact.
+    const sizes = mesh.sets.map((_, i) => psets[i]?.texSize ?? 2048);
+    const stacks: (Layer[] | null)[] = [];
+    try {
+      for (const [i, size] of sizes.entries()) stacks.push(psets[i] ? restoreLayers(this.renderer, this.copier, p, psets[i].layers, size) : null);
+    } catch (e) {
+      for (const st of stacks) st?.forEach(disposeLayer);
+      mesh.geometry.dispose();
+      throw e;
+    }
     this.bake = { ...DEFAULT_BAKE, ...p.json.bake };
     this.composite = { ...this.composite, ...p.json.composite };
     // Projects from older versions lack newer brush fields; fill them from the defaults.
@@ -1088,19 +1167,9 @@ export class App {
         this.toast(`High-poly mesh could not be loaded: ${(e as Error).message}`, 'warn');
       }
     }
-    await this.openMesh(mesh, 'empty', mesh.sets.map((_, i) => psets[i]?.texSize ?? 2048));
+    // openMesh emits 'mesh' last, after its own redraw request: autosave treats the loaded project as unmodified.
+    await this.openMesh(mesh, stacks, sizes);
     if (psets.length !== mesh.sets.length) this.toast(`Project has ${psets.length} texture set(s) but the mesh has ${mesh.sets.length}; matched by order.`, 'warn');
-    this.sets.forEach((s, i) => {
-      const ps = psets[i];
-      if (!ps) return this.defaultLayers(s);
-      s.layers = restoreLayers(this.renderer, this.copier, p, ps.layers, s.texSize);
-      s.selectedId = s.layers[s.layers.length - 1]?.id ?? null;
-      s.part = 'content';
-    });
-    this.rebaseline();
-    this.invalidate(true);
-    this.emit('layers');
-    this.emit('selection');
     this.emit('brush');
     this.emit('settings');
   }

@@ -90,7 +90,7 @@ interface LayerBase {
 
 export interface PaintLayer extends LayerBase {
   kind: 'paint';
-  /** MRT x4 RGBA8: [0] color.rgb + alpha, [1] rough, roughA, metal, metalA, [2] height, heightA, [3] normal.xy, normalA */
+  /** MRT x5 RGBA8, layout as documented at PAINT_TARGETS */
   rt: THREE.WebGLRenderTarget;
 }
 

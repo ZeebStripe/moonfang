@@ -1,8 +1,11 @@
 import './style.css';
 import { App } from './app';
 import { loadDemoMesh } from './engine/meshLoader';
-import { mountDropZone, mountProgress, mountStatusbar, mountToasts, mountToolbar, mountTopbar } from './ui/chrome';
+import { deviceNotice, mountDropZone, mountGpuLossDialog, mountProgress, mountStatusbar, mountToasts, mountToolbar, mountTopbar } from './ui/chrome';
 import { setupAutosave } from './ui/autosave';
+import { reportBug } from './ui/actions';
+import { checkForUpdates } from './ui/updates';
+import { installErrorCapture, onErrorRecorded } from './errors';
 import { bindViewportInput } from './ui/input';
 import { mountStencilOverlay } from './ui/brushUI';
 import { mountLayersPanel } from './ui/layersPanel';
@@ -10,6 +13,9 @@ import { mountPropsPanel } from './ui/propsPanel';
 import { mountShelf } from './ui/shelf';
 
 const $ = (id: string) => document.getElementById(id)!;
+
+// First, so errors during start-up are recorded for bug reports too.
+installErrorCapture();
 
 async function boot() {
   let app: App;
@@ -27,6 +33,14 @@ async function boot() {
   resize();
 
   mountToasts(app);
+  // Offer a report when something breaks (at most once every two minutes, so a burst of errors is one prompt).
+  let lastErrorPrompt = 0;
+  onErrorRecorded(() => {
+    if (Date.now() - lastErrorPrompt < 120_000) return;
+    lastErrorPrompt = Date.now();
+    app.toast('Something went wrong. A bug report would help fix it.', 'error', { label: 'Report…', run: () => reportBug(app) });
+  });
+  mountGpuLossDialog(app);
   mountProgress(app);
   mountTopbar(app, $('topbar'));
   mountToolbar(app, $('toolbar'));
@@ -38,8 +52,10 @@ async function boot() {
   bindViewportInput(app, wrap, $('brush-cursor'));
   mountStencilOverlay(app, wrap);
 
+  await deviceNotice();
   // Offer to restore the last autosave first; otherwise start with the demo mesh.
   if (!(await setupAutosave(app))) await app.openMesh(loadDemoMesh('roundedCube'));
+  void checkForUpdates(app);
   // Exposed for debugging from the devtools console.
   (window as unknown as { app: App }).app = app;
 }

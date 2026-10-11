@@ -22,7 +22,8 @@ fi
 
 if [ ! -d node_modules ]; then
   echo "Installing dependencies, this takes a minute the first time..."
-  npm install || { echo "npm install failed." >&2; exit 1; }
+  # The browser version doesn't need the Electron runtime (~100 MB).
+  ELECTRON_SKIP_BINARY_DOWNLOAD=1 npm install || { echo "npm install failed." >&2; exit 1; }
 fi
 
 if listening; then

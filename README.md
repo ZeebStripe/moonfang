@@ -3,7 +3,10 @@
 A free, open source 3D texture painting tool for game assets.
 It runs in the browser (WebGL2) and is built with TypeScript and three.js.
 
-## Features (v0.1)
+> **Public beta (Beta 0.1.0).** Expect rough edges and please report what breaks:
+> **Help → Report a Bug** in the app, or [open an issue](https://github.com/ZeebStripe/moonfang/issues/new/choose).
+
+## Features
 
 - **Projection painting** onto the 3D model across every PBR channel at once: base color, roughness, metallic, height, normal, **emissive** and **opacity**. Normal detail is combined with the normal derived from height, and normal maps are projected triplanar, then converted into each texel's UV tangent frame (baked as a mesh map). It paints across UV seams and is occlusion-aware, so strokes never bleed onto hidden surfaces. It also fades out at grazing angles.
 - **Brush**: size, hardness, opacity, spacing, pen pressure (size and/or opacity), per-channel toggles and an eraser.
@@ -59,6 +62,22 @@ It runs in the browser (WebGL2) and is built with TypeScript and three.js.
 
 ## Getting started
 
+### Desktop app (recommended)
+
+Download the latest build from the [Releases page](https://github.com/ZeebStripe/moonfang/releases):
+
+- **Windows**: `Moonfang-Setup-<version>.exe` installs Moonfang with a Start menu entry. `Moonfang-<version>-portable.exe`
+  runs without installing. The builds aren't code-signed yet, so Windows SmartScreen may warn the first time: choose
+  *More info → Run anyway*.
+- **Linux**: `Moonfang-<version>-linux-x86_64.AppImage`. Make it executable (`chmod +x`) and run it.
+
+The desktop app works fully offline. It bundles its own Chromium, so it doesn't depend on your browser.
+
+To build the desktop app yourself: `npm install`, then `npm run dist:win` (on Windows) or `npm run dist:linux` (on Linux).
+The packages land in `release/`. `npm run app` runs it without packaging.
+
+### From source, in your browser
+
 On Windows, double-click **`create-shortcut.bat`** once. It adds a **Moonfang** shortcut to the desktop and
 the Start menu that opens the app in its own window of your default browser, without tabs or address bar (app
 mode in Edge, Chrome, Brave or Vivaldi; a separate profile with the toolbars hidden in Firefox), and stops the
@@ -93,7 +112,7 @@ file onto the viewport. The mesh needs non-overlapping UVs in 0–1.
 On Windows PowerShell 5.1, chain commands with `;` rather than `&&`:
 
 ```powershell
-cd "$env:USERPROFILE\OneDrive\Dokumente\moonfang"; npm run dev
+cd "C:\Users\ashmedai\Documents\moonfang"; npm run dev
 ```
 
 To build a static site into `dist/`, which you can host anywhere:
@@ -101,6 +120,17 @@ To build a static site into `dist/`, which you can host anywhere:
 ```bash
 npm run build
 ```
+
+### Saving your work
+
+- **Autosave** runs every 30 seconds while you work (and when the window loses focus). The newest 5 autosaves are
+  kept, and the next start offers to restore the latest one.
+- **File → Save Version…** (Ctrl+Alt+S) is an iterative save: it stores the current state as the next numbered
+  version of the project (v1, v2, …) with an optional note. Versions are kept until you delete them.
+- **File → Saved Versions…** lists versions and autosaves. Restore any of them (your unsaved changes are autosaved
+  first, so restoring is never destructive), download one as a `.mfp` file, or delete it.
+- **File → Save Project** (Ctrl+S) downloads a `.mfp` project file to keep or share. Versions and autosaves live inside
+  the app's own storage, so download the ones you care about as a backup.
 
 ### Typical workflow
 
@@ -129,6 +159,7 @@ npm run build
 | `U` | Toggle the 3D / 2D UV view |
 | Ctrl+Z / Ctrl+Shift+Z | Undo / Redo |
 | Ctrl+O / Ctrl+S / Ctrl+E | Open mesh / Save project / Export |
+| Ctrl+Alt+S | Save version |
 | `?` | Shortcut list |
 
 ## How it works
@@ -159,7 +190,30 @@ All painting and compositing runs on the GPU in **texture space**.
 - Symmetry is disabled while painting in the 2D view.
 - `.sbsar` procedural material files can't be imported, since they need a proprietary engine.
 - WebGL2 with `EXT_color_buffer_float` is required. That covers any recent desktop browser.
+- Desktop only: phones and touch-only tablets aren't supported (a mouse or pen tablet is needed).
+- No macOS desktop build yet (it has to be built and signed on a Mac); Mac users can run it from source in a browser.
+
+## Privacy
+
+Moonfang runs entirely on your computer. There are no accounts, no analytics or telemetry, and nothing you load,
+paint or save is uploaded anywhere. Projects, autosaves, versions and your material library are stored locally (in the
+desktop app's data folder, or in the browser's storage for this site).
+
+Moonfang only goes online in these cases:
+
+- **Update check**: on start, it downloads the public list of Moonfang releases from GitHub to see whether a newer
+  version exists. Nothing about you or your work is sent. Turn it off in the "new version" popup; **Help → Check for
+  Updates** still works by hand.
+- **Links you click**: **Report a Bug** opens a GitHub issue form in your browser with the app version, browser,
+  graphics card and any errors from this session filled in. Nothing is sent until you review the form and submit it
+  yourself. Errors are only kept in memory while the app runs, never stored or sent automatically.
+
+## Support
+
+Moonfang is free. If you'd like to support its development, you can [buy me a coffee on Ko-fi](https://ko-fi.com/zeebstripe)
+(also under **Help** in the app).
 
 ## License
 
-MIT. See [LICENSE](LICENSE).
+MIT. See [LICENSE](LICENSE). Moonfang bundles three.js, three-mesh-bvh and fflate (all MIT); their licenses are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md), which also ships with every build.

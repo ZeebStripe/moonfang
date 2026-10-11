@@ -274,6 +274,8 @@ export class Library {
   /** imported brush tips (normalised greyscale PNG assets) */
   tips: { id: string; name: string; assetId: string }[] = [];
   private listeners = new Set<() => void>();
+  /** Saves run one after another: an older save would otherwise delete images a newer one just stored. */
+  private saving: Promise<void> = Promise.resolve();
 
   constructor(private store: TextureStore) {}
 
@@ -282,7 +284,7 @@ export class Library {
   }
   private changed() {
     for (const fn of this.listeners) fn();
-    void this.persist();
+    this.saving = this.saving.then(() => this.persist());
   }
 
   async load() {

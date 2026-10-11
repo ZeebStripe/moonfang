@@ -76,7 +76,7 @@ if (-not (Test-Listening)) {
   if (-not (Get-Command npm -ErrorAction SilentlyContinue)) { Fail 'Node.js is not installed. Get it from https://nodejs.org and try again.' }
   if (-not (Test-Path (Join-Path $root 'node_modules'))) {
     # First run: show the install so it is clear something is happening.
-    $p = Start-Process cmd -ArgumentList '/c', 'echo Installing dependencies, this takes a minute the first time... && npm install' -WorkingDirectory $root -Wait -PassThru
+    $p = Start-Process cmd -ArgumentList '/c', 'echo Installing dependencies, this takes a minute the first time... && set ELECTRON_SKIP_BINARY_DOWNLOAD=1&& npm install' -WorkingDirectory $root -Wait -PassThru
     if ($p.ExitCode -ne 0) { Fail 'npm install failed. Run start.bat to see the error.' }
   }
   $log = Join-Path $env:TEMP 'moonfang-server.log'
