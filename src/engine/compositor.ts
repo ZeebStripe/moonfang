@@ -31,7 +31,8 @@ float generator(vec3 posN, vec3 pos, vec3 wn, float curv, float ao) {
     // (occlusion + cavities). The lines are slices of one diagonal plane family, so they stay parallel and seamless.
     float shade = clamp((1.0 - ao) * 1.6 + clamp((0.5 - curv) * 2.0, 0.0, 1.0), 0.0, 1.0);
     float stripe = abs(fract(dot(pos, vec3(0.62, 0.74, 0.26)) * nScale * 0.5) - 0.5) * 2.0;  // 0 on a line, 1 between
-    s = shade + (0.5 - stripe) * 0.9;
+    // Shade only widens the lines (up to ~60% ink): even the darkest areas keep gaps, never a solid fill.
+    s = shade * 0.6 + (0.5 - stripe) * 0.9;
     n = fbm(pos * 6.0 + uGen2.z * 13.17);  // breakup at a coarser scale than the line density
   }
   if (uGenType != 4) s += (n - 0.5) * nAmt;

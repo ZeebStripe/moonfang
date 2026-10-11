@@ -21,7 +21,9 @@ It runs in the browser (WebGL2) and is built with TypeScript and three.js.
   - each generator has amount, contrast, noise breakup, scale, invert and seed controls
 - **Mesh map baking** from the low-poly mesh, done on the GPU:
   - ambient occlusion, using 32–512 hemispherical shadow-map samples and a max distance
-  - curvature (dominant principal curvature)
+  - curvature (dominant principal curvature, with normals smoothed only across gentle angles)
+  - a **sharp-edge map**: distance to the nearest hard convex / concave edge (faces meeting above the *sharp edge
+    angle*), so low-poly hard-surface models get crisp, even-width edge wear and ink lines
   - world-space normal and position maps
   - UV padding through a jump-flood dilation, so there are no seams at mip levels
   - **from a high-poly mesh** (Mesh → Bake Mesh Maps → High poly): its detail is ray-traced onto the low poly

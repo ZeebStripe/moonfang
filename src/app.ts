@@ -26,7 +26,7 @@ import type { LayerMask } from './engine/layers';
 import { collectProjectFiles, projectSets, readProject, restoreLayers } from './engine/project';
 import { zipSync } from 'fflate';
 import { Viewport } from './engine/viewport';
-import { loadMeshSource } from './engine/meshLoader';
+import { disposeMeshEdges, loadMeshSource } from './engine/meshLoader';
 import { MATERIALS, type MaterialPreset, type SmartLayerSpec, type SmartMaterial } from './data/materials';
 import { importTextureSet, Library, makeAsset, mapTextureIds, TextureStore } from './engine/library';
 import { builtinTipTexture, importTipImage } from './engine/brushTips';
@@ -337,6 +337,7 @@ export class App {
       if (layers === 'keep') this.highPoly = await hp.refit(mesh).catch(() => null);
       hp.dispose();
     }
+    if (this.mesh && this.mesh !== mesh) disposeMeshEdges(this.mesh);
     this.mesh = mesh;
     this.flatGeometry = flattenToUV(mesh.geometry);
     this.viewport.setGeometry(mesh.geometry, mesh.sets.length);

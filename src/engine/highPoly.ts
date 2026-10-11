@@ -87,12 +87,18 @@ function toFloat(a: THREE.BufferAttribute | THREE.InterleavedBufferAttribute): T
   return new THREE.BufferAttribute(f, 3);
 }
 
-const BVH_GLSL = /* glsl */ `
+/** three-mesh-bvh's GLSL: BVH struct, ray and closest-point queries. */
+export const BVH_FUNCS = /* glsl */ `
 precision highp isampler2D;
 precision highp usampler2D;
 ${BVHShaderGLSL.common_functions}
 ${BVHShaderGLSL.bvh_struct_definitions}
 ${BVHShaderGLSL.bvh_ray_functions}
+${BVHShaderGLSL.bvh_distance_functions}
+`;
+
+const BVH_GLSL = /* glsl */ `
+${BVH_FUNCS}
 uniform BVH bvh;
 uniform sampler2D uHighN;
 `;

@@ -209,7 +209,7 @@ export const SMART_MATERIALS: SmartMaterial[] = [
         name: 'Crease Ink',
         values: { color: [0.03, 0.025, 0.02], roughness: 0.9, metallic: 0, height: 0.5 },
         channels: { metallic: false, height: false },
-        generator: { type: 'curvature', invert: true, amount: 0.63, contrast: 1, noiseAmount: 0.12, noiseScale: 18 },
+        generator: { type: 'curvature', invert: true, amount: 0.82, contrast: 1, noiseAmount: 0.12, noiseScale: 18 },
       },
       {
         name: 'Edge Ink',

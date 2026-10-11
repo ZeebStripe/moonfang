@@ -244,6 +244,23 @@ export function bakeDialog(app: App) {
     selectField('AO samples', [[32, '32 (fast)'], [64, '64'], [128, '128'], [256, '256'], [512, '512 (slow)']] as const, s.aoSamples, (v) => (s.aoSamples = v)),
     slider('AO max distance', { value: s.aoDistance, min: 0.05, max: 2, step: 0.01, onInput: (v) => (s.aoDistance = v) }),
     slider('Curvature gain', { value: s.curvatureGain, min: 0.1, max: 4, step: 0.05, onInput: (v) => (s.curvatureGain = v) }),
+    slider('Sharp edge angle', {
+      value: s.sharpAngle,
+      min: 5,
+      max: 90,
+      step: 1,
+      digits: 0,
+      title: 'Faces meeting at more than this angle form a hard edge (like auto smooth). Hard edges get crisp, even-width edge masks.',
+      onInput: (v) => (s.sharpAngle = v),
+    }),
+    slider('Edge width (% of size)', {
+      value: s.edgeWidth * 100,
+      min: 0.2,
+      max: 10,
+      step: 0.1,
+      title: 'How far edge masks (edge wear, ink outlines, crease dirt) can reach from a hard edge',
+      onInput: (v) => (s.edgeWidth = v / 100),
+    }),
   );
   const go = h('button', { class: 'btn primary' }, 'Bake');
   const close = openModal('Bake Mesh Maps', body, [go]);

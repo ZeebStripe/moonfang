@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { clearTarget, createRT, FullscreenPass, MeshPass, rawMaterial, UV_SPACE_VERT } from './gl';
-import { projectionMaterial, rayAoMaterial, type HighPoly } from './highPoly';
-import { applyCurvatureGain, type PaintMesh } from './meshLoader';
+import { BVH_FUNCS, projectionMaterial, rayAoMaterial, type HighPoly } from './highPoly';
+import { applyCurvatureGain, DEFAULT_SHARP_ANGLE, meshEdges, setSharpAngle, type PaintMesh } from './meshLoader';
 
 export interface BakeSettings {
   aoSamples: number;
@@ -10,9 +10,21 @@ export interface BakeSettings {
   /** high-poly projection cage: how far rays start outside / may end inside the low-poly surface (normalised units) */
   frontDistance: number;
   backDistance: number;
+  /** faces meeting at more than this angle (degrees) form a sharp edge: it goes to the edge map, not the vertex curvature */
+  sharpAngle: number;
+  /** how far (normalised units) the sharp-edge signal reaches from the edge */
+  edgeWidth: number;
 }
 
-export const DEFAULT_BAKE: BakeSettings = { aoSamples: 128, aoDistance: 0.6, curvatureGain: 1, frontDistance: 0.02, backDistance: 0.02 };
+export const DEFAULT_BAKE: BakeSettings = {
+  aoSamples: 128,
+  aoDistance: 0.6,
+  curvatureGain: 1,
+  frontDistance: 0.02,
+  backDistance: 0.02,
+  sharpAngle: DEFAULT_SHARP_ANGLE,
+  edgeWidth: 0.02,
+};
 
 /**
  * Texture-space maps derived from the mesh:
@@ -129,7 +141,7 @@ export class MeshMaps {
     `in vec2 vUv;
      uniform sampler2D uRaw0; uniform sampler2D uRaw1; uniform sampler2D uRaw2; uniform sampler2D uAo; uniform sampler2D uCov; uniform sampler2D uSeeds;
      uniform bool uHigh; uniform sampler2D uProj0; uniform sampler2D uProj1; uniform sampler2D uProj2; uniform sampler2D uRayAo;
-     uniform vec2 uTexel; uniform float uCurvK;
+     uniform vec2 uTexel; uniform float uCurvK; uniform sampler2D uEdges;
      layout(location = 0) out vec4 o0; layout(location = 1) out vec4 o1; layout(location = 2) out vec4 o2; layout(location = 3) out vec4 o3;
      vec2 remap(vec2 uv){ if (texture(uCov, uv).r > 0.5) return uv; vec4 s = texture(uSeeds, uv); return s.x < 0.0 ? uv : s.xy; }
      // Normal of a neighbouring texel, or the centre one where the neighbour has no projection (one-sided difference).
@@ -158,6 +170,10 @@ export class MeshMaps {
          float k = abs(ku) > abs(kv) ? ku : kv;
          curv = 0.5 + 0.5 * tanh(k * uCurvK);
        }
+       // Sharp mesh edges (distance falloff, + convex / − concave) win where they are stronger.
+       vec2 e = texture(uEdges, u).xy;
+       float ce = 0.5 + 0.5 * (e.x - e.y);
+       if (abs(ce - 0.5) > abs(curv - 0.5)) curv = ce;
        o0 = vec4(texture(uRaw0, u).xyz, ao);
        o1 = vec4(r1.xyz, curv);
        o2 = r2;
@@ -177,7 +193,24 @@ export class MeshMaps {
       uRayAo: { value: null },
       uTexel: { value: new THREE.Vector2() },
       uCurvK: { value: 0.1 },
+      uEdges: { value: null },
     },
+  );
+
+  /** Distance from each texel to the nearest sharp convex (r) / concave (g) edge, as a 1 → 0 falloff over uWidth. */
+  private edgeMat = rawMaterial(
+    `${BVH_FUNCS}
+     uniform BVH bvhConvex; uniform BVH bvhConcave; uniform float uWidth;
+     in vec3 vPos;
+     layout(location = 0) out vec4 o0;
+     void main(){
+       uvec4 fi; vec3 fn; vec3 bc; float side; vec3 op;
+       float dv = bvhClosestPointToPoint(bvhConvex, vPos, uWidth, fi, fn, bc, side, op);
+       float dc = bvhClosestPointToPoint(bvhConcave, vPos, uWidth, fi, fn, bc, side, op);
+       o0 = vec4(clamp(1.0 - dv / uWidth, 0.0, 1.0), clamp(1.0 - dc / uWidth, 0.0, 1.0), 0.0, 1.0);
+     }`,
+    { bvhConvex: { value: null }, bvhConcave: { value: null }, uWidth: { value: 0.02 } },
+    { vertex: UV_SPACE_VERT },
   );
 
   private projMat = projectionMaterial();
@@ -205,6 +238,7 @@ export class MeshMaps {
     const r = this.renderer;
     this.dispose();
     this.size = size;
+    setSharpAngle(mesh, settings.sharpAngle);
     applyCurvatureGain(mesh, settings.curvatureGain);
     const pass = new MeshPass(uvGeometry);
     const occluders = new MeshPass(mesh.geometry);
@@ -320,8 +354,19 @@ export class MeshMaps {
     }
     this.usedHighPoly = !!high;
 
+    // 4c. Sharp edges: distance to the nearest convex / concave edge, for crisp even-width edge masks on low poly.
+    const edges = meshEdges(mesh, settings.sharpAngle);
+    const edgeRT = createRT(size, size, { type: THREE.HalfFloatType });
+    clearTarget(r, edgeRT, 0, 0, 0, 0);
+    const eu = this.edgeMat.uniforms;
+    eu.bvhConvex.value = edges.convex;
+    eu.bvhConcave.value = edges.concave;
+    eu.uWidth.value = Math.max(1e-4, settings.edgeWidth);
+    if (edges.count) await new StripScheduler(r).run(edgeRT, size, () => pass.render(r, this.edgeMat, edgeRT));
+
     // 5. Combine + dilate into the final maps.
     const c = this.combineMat.uniforms;
+    c.uEdges.value = edgeRT.texture;
     c.uHigh.value = !!high;
     c.uProj0.value = proj?.textures[0] ?? null;
     c.uProj1.value = proj?.textures[1] ?? null;
@@ -339,6 +384,7 @@ export class MeshMaps {
     this.fs.render(r, this.combineMat, this.maps);
     proj?.dispose();
     rayAo?.dispose();
+    edgeRT.dispose();
     raw.dispose();
     aoAcc.dispose();
     shadow.dispose();

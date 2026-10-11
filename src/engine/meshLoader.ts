@@ -3,6 +3,8 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
 import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
+import type { MeshBVHUniformStruct } from 'three-mesh-bvh';
+import { autoSmoothCurvature, buildTopology, segmentBVH, sharpEdges, type Topology } from './meshAnalysis';
 
 export type MeshSource =
   | { kind: 'demo'; id: DemoMeshId }
@@ -17,8 +19,13 @@ export interface PaintMesh {
   center: THREE.Vector3;
   scale: number;
   bbox: THREE.Box3;
-  /** Raw per-vertex mean curvature (normalised space); mapped to the `curv` attribute by applyCurvatureGain. */
+  /** Raw per-vertex curvature (normalised space); mapped to the `curv` attribute by applyCurvatureGain. */
   curvRaw: Float32Array;
+  /** sharp-edge angle curvRaw was computed with */
+  curvAngle: number;
+  topology: Topology;
+  /** GPU distance sources for the sharp convex / concave edges at `angle` (see meshEdges) */
+  edgeCache?: { angle: number; convex: MeshBVHUniformStruct; concave: MeshBVHUniformStruct; count: number };
   warnings: string[];
   /** texture sets (one per source material), in vertex order */
   sets: TextureSetInfo[];
@@ -194,6 +201,13 @@ function buildPaintMesh(name: string, geometry: THREE.BufferGeometry, source: Me
     if (u < -0.001 || u > 1.001 || v < -0.001 || v > 1.001) outside++;
   }
   if (outside > uv.count * 0.01) warnings.push('Some UVs lie outside the 0–1 range; those areas cannot be painted.');
+  // Total UV area: zero means the model was never unwrapped (all UVs collapsed to a point or line).
+  let uvArea = 0;
+  for (let i = 0; i + 2 < uv.count; i += 3) {
+    const ax = uv.getX(i), ay = uv.getY(i);
+    uvArea += Math.abs((uv.getX(i + 1) - ax) * (uv.getY(i + 2) - ay) - (uv.getX(i + 2) - ax) * (uv.getY(i + 1) - ay)) / 2;
+  }
+  if (uvArea < 1e-4) warnings.push('This model has no usable UV layout (its UVs are collapsed), so nothing can be painted. Unwrap it first (e.g. Smart UV Project in Blender).');
 
   g.computeBoundingSphere();
   const center = g.boundingSphere!.center.clone();
@@ -203,11 +217,38 @@ function buildPaintMesh(name: string, geometry: THREE.BufferGeometry, source: Me
   g.computeBoundingBox();
   g.computeBoundingSphere();
 
-  const curvRaw = computeCurvature(g);
+  const topology = buildTopology(g);
+  const curvAngle = DEFAULT_SHARP_ANGLE;
+  const curvRaw = autoSmoothCurvature(topology, curvAngle);
   g.setAttribute('curv', new THREE.BufferAttribute(new Float32Array(curvRaw.length), 1));
-  const mesh: PaintMesh = { name, geometry: g, source, center, scale, bbox: g.boundingBox!.clone(), curvRaw, warnings, sets };
+  const mesh: PaintMesh = { name, geometry: g, source, center, scale, bbox: g.boundingBox!.clone(), curvRaw, curvAngle, topology, warnings, sets };
   applyCurvatureGain(mesh, 1);
   return mesh;
+}
+
+export const DEFAULT_SHARP_ANGLE = 35;
+
+/** Recomputes the vertex curvature for another sharp-edge angle (edges sharper than it go to the edge map). */
+export function setSharpAngle(mesh: PaintMesh, angle: number) {
+  if (mesh.curvAngle === angle) return;
+  mesh.curvRaw = autoSmoothCurvature(mesh.topology, angle);
+  mesh.curvAngle = angle;
+}
+
+/** Sharp convex / concave edges as GPU distance sources (cached per angle). */
+export function meshEdges(mesh: PaintMesh, angle: number) {
+  if (mesh.edgeCache?.angle !== angle) {
+    disposeMeshEdges(mesh);
+    const e = sharpEdges(mesh.topology, angle);
+    mesh.edgeCache = { angle, convex: segmentBVH(e.convex), concave: segmentBVH(e.concave), count: (e.convex.length + e.concave.length) / 6 };
+  }
+  return mesh.edgeCache!;
+}
+
+export function disposeMeshEdges(mesh: PaintMesh) {
+  mesh.edgeCache?.convex.dispose();
+  mesh.edgeCache?.concave.dispose();
+  mesh.edgeCache = undefined;
 }
 
 /** Maps raw curvature to 0..1 (0.5 = flat, >0.5 convex) with a soft tanh curve. */
@@ -218,113 +259,6 @@ export function applyCurvatureGain(mesh: PaintMesh, gain: number) {
   attr.needsUpdate = true;
 }
 
-/**
- * Per-vertex dominant principal curvature on the welded mesh. Each edge gives a normal-curvature sample
- * κ_ij = ((n_i - n_j) · (p_i - p_j)) / |p_i - p_j|²  (1/R on a sphere of radius R, positive when convex);
- * the vertex keeps whichever of max(κ) / min(κ) has the larger magnitude, so cylindrical bevels register as
- * strongly as spherical corners.
- */
-function computeCurvature(g: THREE.BufferGeometry): Float32Array {
-  const pos = g.attributes.position as THREE.BufferAttribute;
-  const n = pos.count;
-  const weld = new Int32Array(n);
-  const map = new Map<string, number>();
-  const wp: number[] = [];
-  const q = 1e5;
-  for (let i = 0; i < n; i++) {
-    const x = pos.getX(i),
-      y = pos.getY(i),
-      z = pos.getZ(i);
-    const key = `${Math.round(x * q)},${Math.round(y * q)},${Math.round(z * q)}`;
-    let id = map.get(key);
-    if (id === undefined) {
-      id = wp.length / 3;
-      map.set(key, id);
-      wp.push(x, y, z);
-    }
-    weld[i] = id;
-  }
-  const W = wp.length / 3;
-  // Area-weighted smooth normals on the welded topology.
-  const wn = new Float32Array(W * 3);
-  const a = new THREE.Vector3(),
-    b = new THREE.Vector3(),
-    c = new THREE.Vector3(),
-    e1 = new THREE.Vector3(),
-    e2 = new THREE.Vector3();
-  for (let t = 0; t < n; t += 3) {
-    a.fromBufferAttribute(pos, t);
-    b.fromBufferAttribute(pos, t + 1);
-    c.fromBufferAttribute(pos, t + 2);
-    e1.subVectors(b, a);
-    e2.subVectors(c, a);
-    e1.cross(e2);
-    for (let k = 0; k < 3; k++) {
-      const id = weld[t + k];
-      wn[id * 3] += e1.x;
-      wn[id * 3 + 1] += e1.y;
-      wn[id * 3 + 2] += e1.z;
-    }
-  }
-  for (let i = 0; i < W; i++) {
-    const l = Math.hypot(wn[i * 3], wn[i * 3 + 1], wn[i * 3 + 2]) || 1;
-    wn[i * 3] /= l;
-    wn[i * 3 + 1] /= l;
-    wn[i * 3 + 2] /= l;
-  }
-  // Edge list on welded ids.
-  const ea: number[] = [];
-  const eb: number[] = [];
-  for (let t = 0; t < n; t += 3) {
-    for (let k = 0; k < 3; k++) {
-      const i0 = weld[t + k];
-      const i1 = weld[t + ((k + 1) % 3)];
-      if (i0 !== i1) {
-        ea.push(i0);
-        eb.push(i1);
-      }
-    }
-  }
-  const kmax = new Float32Array(W).fill(-Infinity);
-  const kmin = new Float32Array(W).fill(Infinity);
-  for (let e = 0; e < ea.length; e++) {
-    const i = ea[e],
-      j = eb[e];
-    const dx = wp[i * 3] - wp[j * 3],
-      dy = wp[i * 3 + 1] - wp[j * 3 + 1],
-      dz = wp[i * 3 + 2] - wp[j * 3 + 2];
-    const d2 = dx * dx + dy * dy + dz * dz;
-    if (d2 < 1e-12) continue;
-    const dn = (wn[i * 3] - wn[j * 3]) * dx + (wn[i * 3 + 1] - wn[j * 3 + 1]) * dy + (wn[i * 3 + 2] - wn[j * 3 + 2]) * dz;
-    const k = dn / d2;
-    if (k > kmax[i]) kmax[i] = k;
-    if (k < kmin[i]) kmin[i] = k;
-    if (k > kmax[j]) kmax[j] = k;
-    if (k < kmin[j]) kmin[j] = k;
-  }
-  let curv = new Float32Array(W);
-  for (let i = 0; i < W; i++) {
-    if (!isFinite(kmax[i])) continue;
-    curv[i] = kmax[i] > -kmin[i] ? Math.max(0, kmax[i]) : Math.min(0, kmin[i]);
-  }
-  // Two Laplacian smoothing passes to reduce tessellation noise.
-  for (let it = 0; it < 2; it++) {
-    const s = new Float32Array(W);
-    const c2 = new Float32Array(W);
-    for (let e = 0; e < ea.length; e++) {
-      s[ea[e]] += curv[eb[e]];
-      c2[ea[e]]++;
-      s[eb[e]] += curv[ea[e]];
-      c2[eb[e]]++;
-    }
-    const next = new Float32Array(W);
-    for (let i = 0; i < W; i++) next[i] = c2[i] ? 0.5 * curv[i] + 0.5 * (s[i] / c2[i]) : curv[i];
-    curv = next;
-  }
-  const out = new Float32Array(n);
-  for (let i = 0; i < n; i++) out[i] = curv[weld[i]];
-  return out;
-}
 
 /** Cube with rounded edges; each face gets its own square cell in a 3x2 UV atlas. */
 function roundedCube(r: number): THREE.BufferGeometry {
