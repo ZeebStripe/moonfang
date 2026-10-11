@@ -10,6 +10,6 @@ GITHUB_REPO = "ZeebStripe/moonfang-reports"
 PUBLIC_REPO = "false"
 
 # Rate limiting (recommended). Create it with `npx wrangler kv namespace create RATE`, then paste the id below.
-# [[kv_namespaces]]
-# binding = "RATE"
-# id = "<id from the command above>"
+[[kv_namespaces]]
+binding = "RATE"
+id = "876dad48af91494cb75e08453b6e5033"

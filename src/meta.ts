@@ -18,7 +18,7 @@ export const KOFI_URL = 'https://ko-fi.com/zeebstripe';
  * The bug-report relay (report-relay/, a Cloudflare Worker), e.g. 'https://moonfang-reports.<you>.workers.dev/report'.
  * Empty until it is deployed: Report a Bug then opens the prefilled GitHub issue form instead.
  */
-export const REPORT_ENDPOINT = '';
+export const REPORT_ENDPOINT = 'https://moonfang-reports.gay-hyena.workers.dev/report';
 
 /** Browser, OS and GPU, for bug reports. */
 export function environmentInfo(gl: WebGL2RenderingContext | WebGLRenderingContext): string {
