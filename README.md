@@ -57,6 +57,9 @@ It runs in the browser (WebGL2) and is built with TypeScript and three.js.
 
 ## Getting started
 
+On Windows, double-click **`start.bat`** to start Open Painter and open it in your browser; it installs the
+dependencies on first run. **`stop.bat`** stops it. Or manually:
+
 ```bash
 npm install
 npm run dev
