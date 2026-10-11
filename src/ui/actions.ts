@@ -32,7 +32,7 @@ export async function openDemo(app: App, id: DemoMeshId) {
 }
 
 export async function openProjectDialog(app: App) {
-  const file = await pickFile('.opp,.zip');
+  const file = await pickFile('.mfp,.opp,.zip');
   if (file) await openProjectFile(app, file);
 }
 
@@ -50,7 +50,7 @@ export function saveProjectAction(app: App) {
   if (!app.mesh || app.busy) return;
   try {
     const data = app.saveProject();
-    downloadBlob(data as BlobPart, `${safeName(app.mesh.name)}.opp`, 'application/zip');
+    downloadBlob(data as BlobPart, `${safeName(app.mesh.name)}.mfp`, 'application/zip');
     app.toast('Project saved');
   } catch (e) {
     app.toast(`Save failed: ${errorMessage(e)}`, 'error');
@@ -301,11 +301,11 @@ export function shortcutsDialog() {
 
 export function aboutDialog() {
   openModal(
-    'About Open Painter',
+    'About Moonfang',
     h(
       'div',
       { class: 'form' },
-      h('p', {}, 'Open Painter is a free, open source (MIT) 3D texture painting tool for game assets.'),
+      h('p', {}, 'Moonfang is a free, open source (MIT) 3D texture painting tool for game assets.'),
       h(
         'ul',
         {},
@@ -370,7 +370,7 @@ export async function importTextureSetAction(app: App, files?: File[]) {
 }
 
 export async function importLibraryAction(app: App, file?: File | null) {
-  file ??= await pickFile('.oplib,.zip,.json');
+  file ??= await pickFile('.mflib,.oplib,.zip,.json');
   if (!file) return;
   try {
     const r = await app.library.importFile(file.name, new Uint8Array(await file.arrayBuffer()));
@@ -383,7 +383,7 @@ export async function importLibraryAction(app: App, file?: File | null) {
 export function exportLibraryAction(app: App) {
   const lib = app.library;
   if (!lib.materials.length && !lib.smart.length) return app.toast('Your library is empty — import or save a material first.', 'warn');
-  downloadBlob(lib.exportFile() as BlobPart, 'my_materials.oplib', 'application/zip');
+  downloadBlob(lib.exportFile() as BlobPart, 'my_materials.mflib', 'application/zip');
   app.toast(`Exported ${lib.materials.length} material(s) and ${lib.smart.length} smart material(s)`);
 }
 

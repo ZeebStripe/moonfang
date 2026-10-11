@@ -18,7 +18,7 @@ async function boot() {
   } catch (e) {
     const fatal = $('fatal');
     fatal.hidden = false;
-    fatal.textContent = `Open Painter needs WebGL2 with float render targets. ${e instanceof Error ? e.message : e}`;
+    fatal.textContent = `Moonfang needs WebGL2 with float render targets. ${e instanceof Error ? e.message : e}`;
     return;
   }
   const wrap = $('viewport-wrap');

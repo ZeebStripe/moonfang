@@ -38,13 +38,13 @@ export function mountShelf(app: App, root: HTMLElement) {
       { class: 'popup-menu' },
       h('div', { class: 'menu-heading' }, 'Import'),
       item('Texture set (images)…', () => void importTextureSetAction(app), 'Select BaseColor / Roughness / Metallic / Height (or ARM) images of one material'),
-      item('Library file (.oplib / .json)…', () => void importLibraryAction(app)),
+      item('Library file (.mflib / .json)…', () => void importLibraryAction(app)),
       h('div', { class: 'menu-sep' }),
       h('div', { class: 'menu-heading' }, 'Save'),
       item('Selected fill layer as material…', () => saveMaterialDialog(app)),
       item('Layers as smart material…', () => saveSmartMaterialDialog(app)),
       h('div', { class: 'menu-sep' }),
-      item('Export my library (.oplib)…', () => exportLibraryAction(app)),
+      item('Export my library (.mflib)…', () => exportLibraryAction(app)),
     );
     const r = anchor.getBoundingClientRect();
     Object.assign(menu.style, { left: `${r.left}px`, bottom: `${window.innerHeight - r.top + 4}px` });

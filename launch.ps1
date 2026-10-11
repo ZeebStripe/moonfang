@@ -1,4 +1,4 @@
-# Opens Open Painter as a desktop app: starts the dev server hidden, shows the app in its own Edge/Chrome
+# Opens Moonfang as a desktop app: starts the dev server hidden, shows the app in its own Edge/Chrome
 # window (no tabs or address bar) and runs stop.bat once that window is closed.
 # Run through the desktop shortcut made by create-shortcut.bat.
 $ErrorActionPreference = 'Stop'
@@ -6,11 +6,11 @@ $root = $PSScriptRoot
 $port = 5178
 $url = "http://localhost:$port"
 # A browser profile of its own: the app window is then a separate browser process we can wait for.
-$profileDir = Join-Path $env:LOCALAPPDATA 'OpenPainter\browser-profile'
+$profileDir = Join-Path $env:LOCALAPPDATA 'Moonfang\browser-profile'
 
 Add-Type -AssemblyName System.Windows.Forms
 function Fail($msg) {
-  [System.Windows.Forms.MessageBox]::Show($msg, 'Open Painter', 'OK', 'Error') | Out-Null
+  [System.Windows.Forms.MessageBox]::Show($msg, 'Moonfang', 'OK', 'Error') | Out-Null
   exit 1
 }
 
@@ -33,7 +33,7 @@ $browser = @(
   "$env:ProgramFiles\Google\Chrome\Application\chrome.exe",
   "$env:LOCALAPPDATA\Google\Chrome\Application\chrome.exe"
 ) | Where-Object { Test-Path $_ } | Select-Object -First 1
-if (-not $browser) { Fail 'Microsoft Edge or Google Chrome is needed to run Open Painter as an app.' }
+if (-not $browser) { Fail 'Microsoft Edge or Google Chrome is needed to run Moonfang as an app.' }
 
 $browserArgs = @("--app=$url", "--user-data-dir=$profileDir", '--no-first-run', '--no-default-browser-check', '--start-maximized')
 
@@ -50,7 +50,7 @@ if (-not (Test-Listening)) {
     $p = Start-Process cmd -ArgumentList '/c', 'echo Installing dependencies, this takes a minute the first time... && npm install' -WorkingDirectory $root -Wait -PassThru
     if ($p.ExitCode -ne 0) { Fail 'npm install failed. Run start.bat to see the error.' }
   }
-  $log = Join-Path $env:TEMP 'open-painter-server.log'
+  $log = Join-Path $env:TEMP 'moonfang-server.log'
   Start-Process cmd -ArgumentList '/c', "npx vite --port $port --strictPort > `"$log`" 2>&1" -WorkingDirectory $root -WindowStyle Hidden
   $deadline = (Get-Date).AddSeconds(30)
   while (-not (Test-Listening)) {

@@ -256,10 +256,12 @@ function commonName(names: string[]): string {
 
 // ------------------------------------------------------------------------------------------ library
 
-const LIB_FORMAT = 'open-painter-library';
+const LIB_FORMAT = 'moonfang-library';
+/** id written before the rename to Moonfang (still readable) */
+const LEGACY_LIB_FORMAT = 'open-painter-library';
 
 interface LibraryJson {
-  format: typeof LIB_FORMAT;
+  format: typeof LIB_FORMAT | typeof LEGACY_LIB_FORMAT;
   version: 1;
   materials: MaterialPreset[];
   smartMaterials: SmartMaterial[];
@@ -367,17 +369,17 @@ export class Library {
     return zipSync(files, { level: 0 });
   }
 
-  /** Imports a .oplib/.zip (with textures) or a plain library .json. Returns counts. */
+  /** Imports a .mflib/.oplib/.zip (with textures) or a plain library .json. Returns counts. */
   async importFile(name: string, bytes: Uint8Array): Promise<{ materials: number; smart: number }> {
     let json: LibraryJson;
     let files: Record<string, Uint8Array> = {};
     if (/\.json$/i.test(name)) json = JSON.parse(strFromU8(bytes));
     else {
       files = unzipSync(bytes);
-      if (!files['library.json']) throw new Error('library.json missing — not an Open Painter library.');
+      if (!files['library.json']) throw new Error('library.json missing — not a Moonfang library.');
       json = JSON.parse(strFromU8(files['library.json']));
     }
-    if (json.format !== LIB_FORMAT) throw new Error('Not an Open Painter material library.');
+    if (json.format !== LIB_FORMAT && json.format !== LEGACY_LIB_FORMAT) throw new Error('Not a Moonfang material library.');
     for (const t of json.textures ?? []) {
       const data = files[t.path];
       if (data) await this.store.add({ id: t.id, name: t.name, mime: t.mime, bytes: data });
@@ -398,7 +400,7 @@ export class Library {
 let dbPromise: Promise<IDBDatabase> | null = null;
 function db(): Promise<IDBDatabase> {
   dbPromise ??= new Promise((resolve, reject) => {
-    const req = indexedDB.open('open-painter', 1);
+    const req = indexedDB.open('open-painter', 1) // pre-rename name, kept so existing libraries and autosaves stay;
     req.onupgradeneeded = () => req.result.createObjectStore('kv');
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);

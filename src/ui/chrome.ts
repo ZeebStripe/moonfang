@@ -73,7 +73,7 @@ export function mountTopbar(app: App, root: HTMLElement) {
   renderSelects();
 
   root.append(
-    h('div', { class: 'brand' }, h('span', { class: 'logo' }), 'Open Painter'),
+    h('div', { class: 'brand' }, h('span', { class: 'logo' }), 'Moonfang'),
     menu('File', () => [
       { label: 'Open Mesh…', action: () => void openMeshDialog(app), shortcut: 'Ctrl+O' },
       { heading: 'Demo meshes' },
@@ -174,8 +174,8 @@ export function mountDropZone(app: App, target: HTMLElement) {
     'div',
     { class: 'drop-veil' },
     icon(ICONS.plus),
-    h('div', {}, 'Drop a mesh (.glb .obj .fbx), project (.opp), HDRI (.hdr),'),
-    h('div', {}, 'texture-set images (one material) or a material library (.oplib)'),
+    h('div', {}, 'Drop a mesh (.glb .obj .fbx), project (.mfp), HDRI (.hdr),'),
+    h('div', {}, 'texture-set images (one material) or a material library (.mflib)'),
   );
   target.append(veil);
   let depth = 0;
@@ -201,8 +201,8 @@ export function mountDropZone(app: App, target: HTMLElement) {
     const ext = file.name.split('.').pop()!.toLowerCase();
     const isImage = (f: File) => /\.(png|jpe?g|webp|avif)$/i.test(f.name);
     if (files.every(isImage)) await importTextureSetAction(app, files);
-    else if (ext === 'oplib' || ext === 'json') await importLibraryAction(app, file);
-    else if (ext === 'opp' || ext === 'zip') await openProjectFile(app, file);
+    else if (ext === 'mflib' || ext === 'oplib' || ext === 'json') await importLibraryAction(app, file);
+    else if (ext === 'mfp' || ext === 'opp' || ext === 'zip') await openProjectFile(app, file);
     else if (ext === 'hdr') {
       await app.viewport.loadHDR(file);
       app.toast(`Environment: ${file.name}`);

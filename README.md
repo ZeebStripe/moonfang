@@ -1,4 +1,4 @@
-# Open Painter
+# Moonfang
 
 A free, open source 3D texture painting tool for game assets.
 It runs in the browser (WebGL2) and is built with TypeScript and three.js.
@@ -37,7 +37,7 @@ It runs in the browser (WebGL2) and is built with TypeScript and three.js.
   - Import **PBR texture sets** (for example from ambientCG or Poly Haven). Maps are detected from file names: `BaseColor/Albedo/Diffuse`, `Roughness` (or `Gloss`, which is inverted), `Metallic`, `Height/Displacement`, `Normal` (OpenGL, or DirectX when the name contains `DX`), and packed `ARM/ORM`.
   - Textured materials are projected **triplanar** in object space, so they are seamless across UV seams. You can paint with them or use them as fill layers, with adjustable tiling and a color tint.
   - Save a fill layer as a material, or a set of fill layers (with their generator masks) as a **smart material**.
-  - Your library is stored in the browser (IndexedDB). Export or import it as `.oplib` (a zip with the images) or as plain `.json`. Projects embed the textures they use.
+  - Your library is stored in the browser (IndexedDB). Export or import it as `.mflib` (a zip with the images) or as plain `.json`. Projects embed the textures they use.
 - **Smart masks**: one-click generator presets.
 - **Viewport**:
   - PBR preview with image-based lighting (built-in studio or your own `.hdr`)
@@ -50,7 +50,7 @@ It runs in the browser (WebGL2) and is built with TypeScript and three.js.
   - texture sets as **8-bit PNG, 16-bit PNG or OpenEXR** (half float, linear color) zips, with presets for **separate PBR maps**, **glTF/Godot/three.js (ORM)**, **Unreal (ORM, DirectX normal)**, **Unity URP (Metallic/Smoothness)** and **Unity HDRP (Mask Map)**
   - an Emissive map and base-color alpha (opacity) are added automatically when those channels are used
   - a **textured GLB** with the material applied (emissive texture and alpha blending included when used)
-- **Projects**: save and load `.opp` files, which contain the mesh, layers, masks and settings, all lossless.
+- **Projects**: save and load `.mfp` files (older `.opp` files still open), which contain the mesh, layers, masks and settings, all lossless.
 - **Multiple texture sets**: each material of the model is its own texture set, with its own layer stack, resolution and baked maps. Switch sets above the layer stack. Painting only affects the active set, while the whole model still occludes. Export writes one set of maps per texture set (`<name>_<set>_<map>.png`), and the GLB gets one material per set.
 - **Undo/redo** for strokes, fills and layer operations: adding, deleting, duplicating, moving and grouping layers,
   masks and generators, renames and property changes (a slider drag is one step). Up to 80 steps, 24 of them strokes.
@@ -59,12 +59,12 @@ It runs in the browser (WebGL2) and is built with TypeScript and three.js.
 
 ## Getting started
 
-On Windows, double-click **`create-shortcut.bat`** once. It adds an **Open Painter** shortcut to the desktop and
+On Windows, double-click **`create-shortcut.bat`** once. It adds a **Moonfang** shortcut to the desktop and
 the Start menu that opens the app in its own window (Edge or Chrome app mode, no tabs or address bar) and stops
 the server again when you close that window. The app window uses its own browser profile, so its autosave is
 separate from a normal browser tab's.
 
-Alternatively, **`start.bat`** starts Open Painter and opens it in your browser (it installs the dependencies on
+Alternatively, **`start.bat`** starts Moonfang and opens it in your browser (it installs the dependencies on
 first run), and **`stop.bat`** stops it. Or manually:
 
 ```bash
