@@ -32,7 +32,7 @@ It runs in the browser (WebGL2) and is built with TypeScript and three.js.
     included in exports, plus high-poly AO and curvature for the smart masks. The high poly has to sit at the same
     position and in the same units as the low poly. It is stored in the project file.
 - **Materials**: 27 PBR presets, with rendered thumbnails, that you can use on the brush or add as fill layers.
-- **Smart materials**: Worn Painted Steel, Military Paint, Rusty Iron, Weathered Copper, Scuffed Plastic, Antique Gold, Dusty Concrete and **Cel Shaded Comic** (comic-book ink outlines, hard light/shadow bands and hatching) and **Cel Shaded Outline** (the same without hatching). Each is a stack of fill layers driven by generators.
+- **Smart materials**: Worn Painted Steel, Military Paint, Rusty Iron, Weathered Copper, Scuffed Plastic, Antique Gold, Dusty Concrete and **Cel Shaded Comic** (comic-book ink outlines, hard light/shadow bands and hatching) and **Cel Shaded Outline** (the same without hatching). Each is a stack of fill layers driven by generators, added as a folder. Select the folder to recolor the whole material from one **Colors** list.
 - **Your own materials**, via **Library ▾** in the shelf or drag & drop:
   - Import **PBR texture sets** (for example from ambientCG or Poly Haven). Maps are detected from file names: `BaseColor/Albedo/Diffuse`, `Roughness` (or `Gloss`, which is inverted), `Metallic`, `Height/Displacement`, `Normal` (OpenGL, or DirectX when the name contains `DX`), and packed `ARM/ORM`.
   - Textured materials are projected **triplanar** in object space, so they are seamless across UV seams. You can paint with them or use them as fill layers, with adjustable tiling and a color tint.

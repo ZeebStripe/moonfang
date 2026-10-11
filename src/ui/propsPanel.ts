@@ -1,5 +1,5 @@
 import type { App } from '../app';
-import { BLEND_MODES, GEN_LABELS, GEN_TYPES, MAP_KEYS, defaultGenerator, hasMaps, type ChannelKey, type Layer, type MaterialMaps, type MaterialValues, type ChannelSet } from '../engine/layers';
+import { BLEND_MODES, GEN_LABELS, GEN_TYPES, MAP_KEYS, defaultGenerator, hasMaps, type ChannelKey, type FillLayer, type Layer, type MaterialMaps, type MaterialValues, type ChannelSet } from '../engine/layers';
 import type { TextureStore } from '../engine/library';
 import { displaySettings, saveMaterialDialog } from './actions';
 import { checkbox, colorField, h, iconButton, section, selectField, slider } from './dom';
@@ -147,6 +147,7 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
       return section(
         `Folder · ${l.name}`,
         opacity,
+        folderColors(l),
         h('div', { class: 'dim small' }, 'The folder’s layers are composited together, then blended over the layers below through the folder’s mask and opacity.'),
       );
     }
@@ -189,6 +190,32 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
       );
     }
     return section(`Layer · ${l.name}`, ...parts);
+  }
+
+  /**
+   * Every colour of the fill layers inside a folder in one place, so a smart material can be recoloured
+   * without opening it. Layers with their colour channel off are skipped (they don't affect the colour).
+   */
+  function folderColors(group: Layer & { kind: 'group' }): HTMLElement | null {
+    const fills: FillLayer[] = [];
+    const walk = (ls: Layer[]) => {
+      for (const c of ls) {
+        if (c.kind === 'group') walk(c.children);
+        else if (c.kind === 'fill' && (c.channels.color || c.channels.emissive)) fills.push(c);
+      }
+    };
+    walk(group.children);
+    if (!fills.length) return null;
+    const changed = () => {
+      app.layerChanged();
+      scheduleCommit();
+    };
+    // Top of the stack first, like the layer list.
+    const rows = fills.reverse().flatMap((f) => [
+      f.channels.color ? colorField(f.maps?.color ? `${f.name} (tint)` : f.name, f.values.color, (c) => ((f.values.color = c), changed())) : null,
+      f.channels.emissive ? colorField(`${f.name} (emissive)`, f.values.emissive ?? [0, 0, 0], (c) => ((f.values.emissive = c), changed())) : null,
+    ]);
+    return h('div', { class: 'folder-colors' }, h('div', { class: 'subhead' }, 'Colors'), ...rows);
   }
 
   /** Tiling + remove button for textured materials. */
