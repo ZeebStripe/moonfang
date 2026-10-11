@@ -1190,3 +1190,10 @@ table.shortcuts td {
   border-radius: var(--radius);
   background: var(--panel-2);
 }
+.missing-files {
+  margin: 4px 0;
+  padding-left: 18px;
+}
+.missing-files code {
+  color: var(--warn);
+}

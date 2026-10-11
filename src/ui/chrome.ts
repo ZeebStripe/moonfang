@@ -10,7 +10,7 @@ import {
   importTextureSetAction,
   openDemo,
   openMeshDialog,
-  openMeshFile,
+  openMeshFolderDialog,
   openProjectDialog,
   openKofi,
   openModal,
@@ -23,6 +23,7 @@ import { h, icon, iconButton, selectField } from './dom';
 import { ICONS } from './icons';
 import { savesDialog, saveVersionDialog } from './saves';
 import { checkForUpdates } from './updates';
+import { fromDropEntries, fromFiles, openModelFiles, zipKind } from './modelFiles';
 import { VERSION_LABEL } from '../meta';
 
 type MenuItem = { label: string; action: () => void; shortcut?: string } | 'sep' | { heading: string };
@@ -84,6 +85,7 @@ export function mountTopbar(app: App, root: HTMLElement) {
     h('div', { class: 'brand' }, h('span', { class: 'logo' }), 'Moonfang', h('span', { class: 'version-badge', title: 'Public beta — please report bugs (Help → Report a Bug)' }, VERSION_LABEL)),
     menu('File', () => [
       { label: 'Open Mesh…', action: () => void openMeshDialog(app), shortcut: 'Ctrl+O' },
+      { label: 'Open Mesh Folder…', action: () => void openMeshFolderDialog(app) },
       { heading: 'Demo meshes' },
       ...DEMO_MESHES.map((d) => ({ label: `   ${d.label}`, action: () => void openDemo(app, d.id) })),
       'sep',
@@ -191,7 +193,8 @@ export function mountDropZone(app: App, target: HTMLElement) {
     'div',
     { class: 'drop-veil' },
     icon(ICONS.plus),
-    h('div', {}, 'Drop a mesh (.glb .obj .fbx), project (.mfp), HDRI (.hdr),'),
+    h('div', {}, 'Drop a mesh (.glb .obj .fbx, or a .gltf with its files, folder or .zip),'),
+    h('div', {}, 'a project (.mfp), an HDRI (.hdr),'),
     h('div', {}, 'texture-set images (one material) or a material library (.mflib)'),
   );
   target.append(veil);
@@ -211,19 +214,37 @@ export function mountDropZone(app: App, target: HTMLElement) {
   target.addEventListener('drop', async (e) => {
     depth = 0;
     veil.classList.remove('show');
-    const files = Array.from(e.dataTransfer?.files ?? []);
+    const dt = e.dataTransfer;
+    if (!dt) return;
+    e.preventDefault();
+    // Folder entries are only readable during the event itself, so take them before the first await.
+    const entries = Array.from(dt.items)
+      .map((i) => i.webkitGetAsEntry?.())
+      .filter((x): x is FileSystemEntry => !!x);
+    const files = Array.from(dt.files);
+    if (entries.some((en) => en.isDirectory)) return void openModelFiles(app, await fromDropEntries(entries));
     const file = files[0];
     if (!file) return;
-    e.preventDefault();
     const ext = file.name.split('.').pop()!.toLowerCase();
     const isImage = (f: File) => /\.(png|jpe?g|webp|avif)$/i.test(f.name);
     if (files.every(isImage)) await importTextureSetAction(app, files);
     else if (ext === 'mflib' || ext === 'json') await importLibraryAction(app, file);
-    else if (ext === 'mfp' || ext === 'zip') await openProjectFile(app, file);
-    else if (ext === 'hdr') {
+    else if (ext === 'mfp') await openProjectFile(app, file);
+    else if (ext === 'zip' && files.length === 1) {
+      // A .zip is a project, a material library or a zipped model: tell by its contents.
+      let kind: ReturnType<typeof zipKind>;
+      try {
+        kind = zipKind(new Uint8Array(await file.arrayBuffer()));
+      } catch (err) {
+        return app.toast(`Could not read ${file.name}: ${err instanceof Error ? err.message : err}`, 'error');
+      }
+      if (kind === 'project') await openProjectFile(app, file);
+      else if (kind === 'library') await importLibraryAction(app, file);
+      else await openModelFiles(app, fromFiles(files));
+    } else if (ext === 'hdr') {
       await app.viewport.loadHDR(file);
       app.toast(`Environment: ${file.name}`);
-    } else await openMeshFile(app, file);
+    } else await openModelFiles(app, fromFiles(files)); // all dropped files: a .gltf finds its .bin among them
   });
 }
 

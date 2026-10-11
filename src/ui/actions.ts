@@ -1,8 +1,9 @@
 import type { App } from '../app';
 import { downloadBlob, EXPORT_FORMATS, EXPORT_PRESETS, exportPrefixes, type ExportFormat } from '../engine/exporter';
 import { walkLayers } from '../engine/layers';
-import { loadDemoMesh, loadMeshFile, type DemoMeshId } from '../engine/meshLoader';
-import { checkbox, h, pickFile, pickFiles, selectField, slider } from './dom';
+import { loadDemoMesh, type DemoMeshId } from '../engine/meshLoader';
+import { checkbox, h, pickFile, pickFiles, pickFolder, selectField, slider } from './dom';
+import { fromFiles, MODEL_ACCEPT, openModelFiles, resolveModel } from './modelFiles';
 import { ICONS } from './icons';
 import { bugReportUrl, KOFI_URL, REPO_URL, VERSION_LABEL } from '../meta';
 import { errorLog } from '../errors';
@@ -11,21 +12,16 @@ export function errorMessage(e: unknown) {
   return e instanceof Error ? e.message : String(e);
 }
 
+/** Open Mesh: a model, or a .gltf together with its .bin files, or a .zip of the model. */
 export async function openMeshDialog(app: App) {
-  const file = await pickFile('.glb,.gltf,.obj,.fbx');
-  if (file) await openMeshFile(app, file);
+  const files = await pickFiles(MODEL_ACCEPT, true);
+  if (files.length) await openModelFiles(app, fromFiles(files));
 }
 
-export async function openMeshFile(app: App, file: File) {
-  if (app.busy) return;
-  try {
-    const mesh = await loadMeshFile(file.name, await file.arrayBuffer());
-    const keep = app.mesh && app.allLayers.length > 2 && confirm('Keep the current layers on the new mesh? (Cancel starts a fresh layer stack)');
-    await app.openMesh(mesh, keep ? 'keep' : 'reset');
-    app.toast(`Loaded ${file.name}`);
-  } catch (e) {
-    app.toast(`Could not load mesh: ${errorMessage(e)}`, 'error');
-  }
+/** Open Mesh Folder: the model's whole folder (e.g. scene.gltf + scene.bin + textures/). */
+export async function openMeshFolderDialog(app: App) {
+  const files = await pickFolder();
+  if (files.length) await openModelFiles(app, fromFiles(files));
 }
 
 export async function openDemo(app: App, id: DemoMeshId) {
@@ -241,11 +237,12 @@ export function bakeDialog(app: App) {
   };
   hpLoad.addEventListener('click', async () => {
     if (busyWarning(app)) return;
-    const file = await pickFile('.glb,.gltf,.obj,.fbx');
-    if (!file) return;
-    hpLabel.textContent = `Loading ${file.name}…`;
+    const files = await pickFiles(MODEL_ACCEPT, true);
+    if (!files.length) return;
+    hpLabel.textContent = 'Loading…';
     try {
-      await app.setHighPoly({ name: file.name, bytes: await file.arrayBuffer() });
+      const model = await resolveModel(app, fromFiles(files));
+      if (model) await app.setHighPoly({ name: model.name, bytes: model.bytes.slice().buffer });
     } catch (e) {
       app.toast(`Could not load high poly: ${errorMessage(e)}`, 'error');
     }

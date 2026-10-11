@@ -113,6 +113,24 @@ export async function pickFile(accept: string): Promise<File | null> {
   return (await pickFiles(accept, false))[0] ?? null;
 }
 
+/** Opens a folder picker and resolves with every file inside (paths in webkitRelativePath; empty when cancelled). */
+export function pickFolder(): Promise<File[]> {
+  return new Promise((resolve) => {
+    const input = h('input', { type: 'file', style: { display: 'none' } }) as HTMLInputElement;
+    input.webkitdirectory = true;
+    input.addEventListener('change', () => {
+      resolve(Array.from(input.files ?? []));
+      input.remove();
+    });
+    input.addEventListener('cancel', () => {
+      resolve([]);
+      input.remove();
+    });
+    document.body.append(input);
+    input.click();
+  });
+}
+
 /** Opens a file picker and resolves with the chosen files (empty when cancelled). */
 export function pickFiles(accept: string, multiple = true): Promise<File[]> {
   return new Promise((resolve) => {

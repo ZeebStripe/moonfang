@@ -100,12 +100,12 @@ npm run dev
 ```
 
 Then open http://localhost:5178. A demo mesh loads automatically. To use your own mesh, use **File → Open Mesh**, or drag a
-file onto the viewport. The mesh needs non-overlapping UVs in 0–1.
+file, a model folder or a zipped model onto the viewport. The mesh needs non-overlapping UVs in 0–1.
 
 | Mesh format | Notes |
 | --- | --- |
 | `.glb` | Recommended. |
-| `.gltf` | Only with embedded buffers. A `.gltf` that uses a separate `.bin` file or external textures can't be opened yet; convert it to `.glb`. |
+| `.gltf` | Select or drop it together with its `.bin` file(s), drop its whole folder, use **File → Open Mesh Folder…**, or open a `.zip` of it (as downloaded from Sketchfab and similar sites). If a `.bin` is missing, Moonfang asks for it. The model's own texture images aren't needed: Moonfang only uses the geometry, UVs and materials, and packs the rest into a single `.glb` inside the project. |
 | `.obj` | Mesh only. The `.mtl` file is ignored. |
 | `.fbx` | Binary or ASCII. Skinned meshes are painted in their bind pose. |
 
