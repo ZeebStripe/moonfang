@@ -4,6 +4,11 @@
 materials straight onto your models, layer smart materials and masks, and export ready-to-use texture sets.
 It runs as a desktop app or in the browser (WebGL2) and is built with TypeScript and three.js.
 
+### [⬇ Download Moonfang 3D for Windows or Linux](https://github.com/ZeebStripe/moonfang/releases)
+
+Open the newest release, then under **Assets** pick `Moonfang-3D-Setup-….exe` (Windows) or the `.AppImage` (Linux).
+The app isn't among the repository's files above; it is only on the Releases page.
+
 ![Moonfang 3D with the Rusty Iron smart material on a torus knot](docs/screenshots/hero.png)
 
 | | |
