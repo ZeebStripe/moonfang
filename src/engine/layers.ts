@@ -44,7 +44,7 @@ export type BlendMode = (typeof BLEND_MODES)[number];
 export const HEIGHT_BLENDS = ['add', 'normal'] as const;
 export type HeightBlend = (typeof HEIGHT_BLENDS)[number];
 
-export const GEN_TYPES = ['none', 'edge', 'dirt', 'gradient', 'noise', 'facing', 'ao', 'curvature'] as const;
+export const GEN_TYPES = ['none', 'edge', 'dirt', 'gradient', 'noise', 'facing', 'ao', 'curvature', 'hatch'] as const;
 export type GenType = (typeof GEN_TYPES)[number];
 export const GEN_LABELS: Record<GenType, string> = {
   none: 'None',
@@ -55,6 +55,7 @@ export const GEN_LABELS: Record<GenType, string> = {
   facing: 'Top Facing (Dust)',
   ao: 'Ambient Occlusion',
   curvature: 'Curvature',
+  hatch: 'Hatching (shadows)',
 };
 
 export interface GeneratorParams {
@@ -169,6 +170,8 @@ export function defaultGenerator(type: GenType): GeneratorParams {
       return { ...base, amount: 0.5, contrast: 0.6, noiseScale: 5 };
     case 'facing':
       return { ...base, amount: 0.4, contrast: 0.5, noiseAmount: 0.3 };
+    case 'hatch':
+      return { ...base, amount: 0.5, contrast: 0.9, noiseScale: 60, noiseAmount: 0.1 };
     default:
       return base;
   }

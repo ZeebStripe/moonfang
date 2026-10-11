@@ -26,6 +26,14 @@ float generator(vec3 posN, vec3 pos, vec3 wn, float curv, float ao) {
   else if (uGenType == 5) s = clamp(wn.y, 0.0, 1.0);
   else if (uGenType == 6) s = 1.0 - ao;
   else if (uGenType == 7) s = curv;
+  else if (uGenType == 8) {
+    // Comic-style hatching: diagonal ink lines (noise scale = line density) that thicken with shadow
+    // (occlusion + cavities). The lines are slices of one diagonal plane family, so they stay parallel and seamless.
+    float shade = clamp((1.0 - ao) * 1.6 + clamp((0.5 - curv) * 2.0, 0.0, 1.0), 0.0, 1.0);
+    float stripe = abs(fract(dot(pos, vec3(0.62, 0.74, 0.26)) * nScale * 0.5) - 0.5) * 2.0;  // 0 on a line, 1 between
+    s = shade + (0.5 - stripe) * 0.9;
+    n = fbm(pos * 6.0 + uGen2.z * 13.17);  // breakup at a coarser scale than the line density
+  }
   if (uGenType != 4) s += (n - 0.5) * nAmt;
   float t = 1.0 - amount;
   float w = mix(1.0, 0.02, contrast);

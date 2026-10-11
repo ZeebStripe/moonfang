@@ -174,6 +174,52 @@ export const SMART_MATERIALS: SmartMaterial[] = [
     ],
   },
   {
+    // Comic / cel-shaded look: flat colour, hard-edged light and shadow bands,
+    // black ink on edges and creases, hatching in the shadows. Recolour "Base Colour"; tune the ink layers'
+    // generator amounts to the model (they follow the baked curvature, so the bake's curvature gain matters too).
+    id: 'cel_comic',
+    name: 'Cel Shaded Comic',
+    preview:
+      'repeating-linear-gradient(45deg, rgba(0,0,0,.55) 0 2px, transparent 2px 7px) 0 60% / 100% 40% no-repeat, radial-gradient(circle at 35% 30%, #f0b45a 0 40%, #b06f3a 41% 68%, #111 69% 74%, #b06f3a 75%)',
+    layers: [
+      { name: 'Base Colour', values: { color: [0.86, 0.6, 0.3], roughness: 0.8, metallic: 0, height: 0.5 }, channels: { height: false }, variation: 0.06, variationScale: 40 },
+      {
+        name: 'Shadow Band',
+        values: { color: [0.58, 0.52, 0.66], roughness: 0.8, metallic: 0, height: 0.5 },
+        channels: { roughness: false, metallic: false, height: false },
+        blend: 'multiply',
+        generator: { type: 'ao', amount: 0.45, contrast: 1, noiseAmount: 0.06, noiseScale: 10 },
+      },
+      {
+        name: 'Highlight Band',
+        values: { color: [0.32, 0.28, 0.2], roughness: 0.8, metallic: 0, height: 0.5 },
+        channels: { roughness: false, metallic: false, height: false },
+        blend: 'screen',
+        opacity: 0.7,
+        generator: { type: 'facing', amount: 0.3, contrast: 1, noiseAmount: 0.08, noiseScale: 8 },
+      },
+      {
+        name: 'Hatching',
+        values: { color: [0.03, 0.025, 0.02], roughness: 0.9, metallic: 0, height: 0.5 },
+        channels: { metallic: false, height: false },
+        opacity: 0.85,
+        generator: { type: 'hatch', amount: 0.5, contrast: 0.9, noiseScale: 60, noiseAmount: 0.1 },
+      },
+      {
+        name: 'Crease Ink',
+        values: { color: [0.03, 0.025, 0.02], roughness: 0.9, metallic: 0, height: 0.5 },
+        channels: { metallic: false, height: false },
+        generator: { type: 'curvature', invert: true, amount: 0.63, contrast: 1, noiseAmount: 0.12, noiseScale: 18 },
+      },
+      {
+        name: 'Edge Ink',
+        values: { color: [0.03, 0.025, 0.02], roughness: 0.9, metallic: 0, height: 0.5 },
+        channels: { metallic: false, height: false },
+        generator: { type: 'edge', amount: 0.32, contrast: 1, noiseAmount: 0.18, noiseScale: 14 },
+      },
+    ],
+  },
+  {
     id: 'dusty_concrete',
     name: 'Dusty Concrete',
     preview: 'radial-gradient(circle at 35% 30%, #c8c3b8 0 30%, #8b8a84 31% 65%, #4f4d48 66%)',
@@ -212,6 +258,12 @@ export const SMART_MASKS: SmartMaskPreset[] = [
     name: 'Noise Spots',
     preview: 'radial-gradient(circle at 30% 40%,#eee 0 15%,#111 17%),radial-gradient(circle at 70% 60%,#eee 0 12%,#111 14%)',
     generator: { type: 'noise', amount: 0.3, contrast: 0.85, noiseScale: 9 },
+  },
+  {
+    id: 'hatch',
+    name: 'Hatching',
+    preview: 'repeating-linear-gradient(45deg,#eee 0 2px,#111 2px 6px)',
+    generator: { type: 'hatch' },
   },
   { id: 'ao', name: 'Occlusion', preview: 'radial-gradient(circle,#222,#eee 70%)', generator: { type: 'ao', amount: 0.5, contrast: 0.2, noiseAmount: 0 } },
 ];

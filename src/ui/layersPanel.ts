@@ -55,7 +55,7 @@ export function mountLayersPanel(app: App, root: HTMLElement) {
       h('button', { onclick: () => (app.addMask(l.id, 'white'), close()) }, 'Add white mask (paint to hide)'),
       h('button', { onclick: () => (app.addMask(l.id, 'black'), close()) }, 'Add black mask (paint to reveal)'),
       h('div', { class: 'menu-sep' }),
-      ...(['edge', 'dirt', 'facing', 'gradient', 'noise', 'ao', 'curvature'] as const).map((t) =>
+      ...(['edge', 'dirt', 'facing', 'gradient', 'noise', 'ao', 'curvature', 'hatch'] as const).map((t) =>
         h('button', { onclick: () => (app.addMask(l.id, 'white', { type: t }), close()) }, `Generator: ${GEN_LABELS[t]}`),
       ),
       l.mask ? h('div', { class: 'menu-sep' }) : null,
