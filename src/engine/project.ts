@@ -18,9 +18,7 @@ import type { BakeSettings } from './meshMaps';
 import type { CompositeSettings } from './compositor';
 import type { BrushSettings } from './painter';
 
-const FORMAT = 'moonfang-project';
-/** id written before the rename to Moonfang (still readable) */
-const LEGACY_FORMAT = 'open-painter-project';
+export const PROJECT_FORMAT = 'moonfang-project';
 /** 2 = per-texture-set layer stacks (version 1 had a single stack at the top level). */
 const VERSION = 2;
 
@@ -37,7 +35,7 @@ interface SerializedSet {
 }
 
 interface ProjectJson {
-  format: typeof FORMAT | typeof LEGACY_FORMAT;
+  format: typeof PROJECT_FORMAT;
   version: number;
   sets?: SerializedSet[];
   /** version 1 only */
@@ -112,7 +110,7 @@ export function collectProjectFiles(renderer: THREE.WebGLRenderer, s: ProjectSta
     highPoly = { name: s.highPoly.name, path: `highpoly/${s.highPoly.name}` };
     files[highPoly.path] = new Uint8Array(s.highPoly.bytes);
   }
-  const json: ProjectJson = { format: FORMAT, version: VERSION, sets, mesh, bake: s.bake, highPoly, composite: s.composite, brush: s.brush, textures };
+  const json: ProjectJson = { format: PROJECT_FORMAT, version: VERSION, sets, mesh, bake: s.bake, highPoly, composite: s.composite, brush: s.brush, textures };
   files['project.json'] = strToU8(JSON.stringify(json, null, 1));
   renderer.setRenderTarget(null);
   return files;
@@ -130,7 +128,7 @@ export function readProject(bytes: Uint8Array): LoadedProject {
   const files = unzipSync(bytes);
   if (!files['project.json']) throw new Error('Not a Moonfang project (project.json missing).');
   const json = JSON.parse(strFromU8(files['project.json'])) as ProjectJson;
-  if (json.format !== FORMAT && json.format !== LEGACY_FORMAT) throw new Error('Not a Moonfang project.');
+  if (json.format !== PROJECT_FORMAT) throw new Error('Not a Moonfang project.');
   if (json.version > VERSION) throw new Error(`Project was saved by a newer version (format ${json.version}).`);
   let meshSource: MeshSource;
   if (json.mesh.kind === 'demo') meshSource = { kind: 'demo', id: json.mesh.id as never };

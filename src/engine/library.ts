@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
 import type { MaterialPreset, SmartMaterial } from '../data/materials';
+import { PROJECT_FORMAT } from './project';
 import { MAP_KEYS, type MaterialMaps } from './layers';
 
 /** Raw image file used by material maps. Ids are content hashes, so identical images are shared. */
@@ -257,11 +258,9 @@ function commonName(names: string[]): string {
 // ------------------------------------------------------------------------------------------ library
 
 const LIB_FORMAT = 'moonfang-library';
-/** id written before the rename to Moonfang (still readable) */
-const LEGACY_LIB_FORMAT = 'open-painter-library';
 
 interface LibraryJson {
-  format: typeof LIB_FORMAT | typeof LEGACY_LIB_FORMAT;
+  format: typeof LIB_FORMAT;
   version: 1;
   materials: MaterialPreset[];
   smartMaterials: SmartMaterial[];
@@ -369,7 +368,7 @@ export class Library {
     return zipSync(files, { level: 0 });
   }
 
-  /** Imports a .mflib/.oplib/.zip (with textures) or a plain library .json. Returns counts. */
+  /** Imports a .mflib/.zip (with textures) or a plain library .json. Returns counts. */
   async importFile(name: string, bytes: Uint8Array): Promise<{ materials: number; smart: number }> {
     let json: LibraryJson;
     let files: Record<string, Uint8Array> = {};
@@ -379,7 +378,7 @@ export class Library {
       if (!files['library.json']) throw new Error('library.json missing — not a Moonfang library.');
       json = JSON.parse(strFromU8(files['library.json']));
     }
-    if (json.format !== LIB_FORMAT && json.format !== LEGACY_LIB_FORMAT) throw new Error('Not a Moonfang material library.');
+    if (json.format !== LIB_FORMAT) throw new Error('Not a Moonfang material library.');
     for (const t of json.textures ?? []) {
       const data = files[t.path];
       if (data) await this.store.add({ id: t.id, name: t.name, mime: t.mime, bytes: data });
@@ -400,12 +399,73 @@ export class Library {
 let dbPromise: Promise<IDBDatabase> | null = null;
 function db(): Promise<IDBDatabase> {
   dbPromise ??= new Promise((resolve, reject) => {
-    const req = indexedDB.open('open-painter', 1) // pre-rename name, kept so existing libraries and autosaves stay;
-    req.onupgradeneeded = () => req.result.createObjectStore('kv');
-    req.onsuccess = () => resolve(req.result);
+    let created = false;
+    const req = indexedDB.open('moonfang', 1);
+    req.onupgradeneeded = () => {
+      created = true;
+      req.result.createObjectStore('kv');
+    };
+    req.onsuccess = () => (created ? migrateOldStore(req.result).finally(() => resolve(req.result)) : resolve(req.result));
     req.onerror = () => reject(req.error);
   });
   return dbPromise;
+}
+
+/** Name of the store (and prefix of the format ids) before the app was renamed to Moonfang. */
+const OLD_NAME = 'open-painter';
+
+/**
+ * One-time move of the library and autosave from the pre-rename store into the new one (the autosave's project
+ * format id is updated on the way), then the old store is deleted. Does nothing when there is no old store.
+ */
+async function migrateOldStore(target: IDBDatabase) {
+  try {
+    const old = await new Promise<IDBDatabase | null>((resolve) => {
+      const req = indexedDB.open(OLD_NAME);
+      // Opening a store that doesn't exist creates it: abort that instead.
+      req.onupgradeneeded = () => req.transaction?.abort();
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    });
+    if (!old) return;
+    if (!old.objectStoreNames.contains('kv')) {
+      old.close();
+      return;
+    }
+    const [keys, values] = await new Promise<[IDBValidKey[], unknown[]]>((resolve, reject) => {
+      const s = old.transaction('kv', 'readonly').objectStore('kv');
+      const k = s.getAllKeys();
+      const v = s.getAll();
+      v.onsuccess = () => resolve([k.result, v.result]);
+      v.onerror = () => reject(v.error);
+    });
+    old.close();
+    await new Promise<void>((resolve, reject) => {
+      const t = target.transaction('kv', 'readwrite');
+      const s = t.objectStore('kv');
+      keys.forEach((k, i) => s.put(k === 'autosave' ? renameAutosave(values[i]) : values[i], k));
+      t.oncomplete = () => resolve();
+      t.onerror = () => reject(t.error);
+    });
+    indexedDB.deleteDatabase(OLD_NAME);
+  } catch (e) {
+    console.warn('Could not move the library from the old store', e);
+  }
+}
+
+function renameAutosave(rec: unknown): unknown {
+  const r = rec as { bytes?: Uint8Array };
+  if (!r?.bytes) return rec;
+  try {
+    const files = unzipSync(r.bytes);
+    const json = JSON.parse(strFromU8(files['project.json']));
+    if (json.format !== `${OLD_NAME}-project`) return rec;
+    json.format = PROJECT_FORMAT;
+    files['project.json'] = strToU8(JSON.stringify(json));
+    return { ...r, bytes: zipSync(files, { level: 1 }) };
+  } catch {
+    return rec;
+  }
 }
 function tx<T>(mode: IDBTransactionMode, fn: (s: IDBObjectStore) => IDBRequest<T>): Promise<T> {
   return db().then(

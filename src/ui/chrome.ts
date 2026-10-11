@@ -201,8 +201,8 @@ export function mountDropZone(app: App, target: HTMLElement) {
     const ext = file.name.split('.').pop()!.toLowerCase();
     const isImage = (f: File) => /\.(png|jpe?g|webp|avif)$/i.test(f.name);
     if (files.every(isImage)) await importTextureSetAction(app, files);
-    else if (ext === 'mflib' || ext === 'oplib' || ext === 'json') await importLibraryAction(app, file);
-    else if (ext === 'mfp' || ext === 'opp' || ext === 'zip') await openProjectFile(app, file);
+    else if (ext === 'mflib' || ext === 'json') await importLibraryAction(app, file);
+    else if (ext === 'mfp' || ext === 'zip') await openProjectFile(app, file);
     else if (ext === 'hdr') {
       await app.viewport.loadHDR(file);
       app.toast(`Environment: ${file.name}`);

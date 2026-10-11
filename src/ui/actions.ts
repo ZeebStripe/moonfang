@@ -32,7 +32,7 @@ export async function openDemo(app: App, id: DemoMeshId) {
 }
 
 export async function openProjectDialog(app: App) {
-  const file = await pickFile('.mfp,.opp,.zip');
+  const file = await pickFile('.mfp,.zip');
   if (file) await openProjectFile(app, file);
 }
 
@@ -370,7 +370,7 @@ export async function importTextureSetAction(app: App, files?: File[]) {
 }
 
 export async function importLibraryAction(app: App, file?: File | null) {
-  file ??= await pickFile('.mflib,.oplib,.zip,.json');
+  file ??= await pickFile('.mflib,.zip,.json');
   if (!file) return;
   try {
     const r = await app.library.importFile(file.name, new Uint8Array(await file.arrayBuffer()));

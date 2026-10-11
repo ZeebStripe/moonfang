@@ -4,10 +4,6 @@ $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
 $shell = New-Object -ComObject WScript.Shell
 foreach ($dir in [Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs')) {
-  # Shortcut from before the rename.
-  Remove-Item (Join-Path $dir 'Open Painter.lnk') -ErrorAction SilentlyContinue
-}
-foreach ($dir in [Environment]::GetFolderPath('Desktop'), [Environment]::GetFolderPath('Programs')) {
   $path = Join-Path $dir 'Moonfang.lnk'
   $lnk = $shell.CreateShortcut($path)
   $lnk.TargetPath = Join-Path $PSHOME 'powershell.exe'

@@ -50,7 +50,7 @@ It runs in the browser (WebGL2) and is built with TypeScript and three.js.
   - texture sets as **8-bit PNG, 16-bit PNG or OpenEXR** (half float, linear color) zips, with presets for **separate PBR maps**, **glTF/Godot/three.js (ORM)**, **Unreal (ORM, DirectX normal)**, **Unity URP (Metallic/Smoothness)** and **Unity HDRP (Mask Map)**
   - an Emissive map and base-color alpha (opacity) are added automatically when those channels are used
   - a **textured GLB** with the material applied (emissive texture and alpha blending included when used)
-- **Projects**: save and load `.mfp` files (older `.opp` files still open), which contain the mesh, layers, masks and settings, all lossless.
+- **Projects**: save and load `.mfp` files, which contain the mesh, layers, masks and settings, all lossless.
 - **Multiple texture sets**: each material of the model is its own texture set, with its own layer stack, resolution and baked maps. Switch sets above the layer stack. Painting only affects the active set, while the whole model still occludes. Export writes one set of maps per texture set (`<name>_<set>_<map>.png`), and the GLB gets one material per set.
 - **Undo/redo** for strokes, fills and layer operations: adding, deleting, duplicating, moving and grouping layers,
   masks and generators, renames and property changes (a slider drag is one step). Up to 80 steps, 24 of them strokes.
@@ -93,7 +93,7 @@ file onto the viewport. The mesh needs non-overlapping UVs in 0–1.
 On Windows PowerShell 5.1, chain commands with `;` rather than `&&`:
 
 ```powershell
-cd "$env:USERPROFILE\OneDrive\Dokumente\open-painter"; npm run dev
+cd "$env:USERPROFILE\OneDrive\Dokumente\moonfang"; npm run dev
 ```
 
 To build a static site into `dist/`, which you can host anywhere:
