@@ -1,6 +1,6 @@
 # Third-party notices
 
-Moonfang 3D Textures (Moonfang) itself is licensed under the MIT License (see LICENSE). The application bundles the following
+Moonfang 3D (Moonfang) itself is licensed under the MIT License (see LICENSE). The application bundles the following
 third-party software, each under its own license, reproduced below.
 
 The desktop app is built with [Electron](https://www.electronjs.org/) (MIT), which ships its own license file and the

@@ -1,4 +1,4 @@
-// Moonfang 3D Textures desktop app: serves the built web app (dist/) from a private app:// origin in a Chromium window.
+// Moonfang 3D desktop app: serves the built web app (dist/) from a private app:// origin in a Chromium window.
 // No network access is needed; IndexedDB (autosaves, versions, material library) lives in the app's user-data folder.
 const { app, BrowserWindow, dialog, ipcMain, net, protocol, shell } = require('electron');
 const fs = require('node:fs/promises');
@@ -30,7 +30,7 @@ function createWindow() {
     minHeight: 700,
     show: false,
     backgroundColor: '#17181b',
-    title: 'Moonfang 3D Textures',
+    title: 'Moonfang 3D',
     icon: path.join(__dirname, '..', 'icon.png'),
     autoHideMenuBar: true,
     // backgroundThrottling off: long bakes keep going at full speed while the window is minimised or covered.
@@ -59,7 +59,7 @@ function createWindow() {
       buttons: ['Close anyway', 'Keep working'],
       defaultId: 1,
       cancelId: 1,
-      title: 'Moonfang 3D Textures',
+      title: 'Moonfang 3D',
       message: 'Close Moonfang?',
       detail: 'Your latest changes are newer than the last autosave (autosaves run every 30 seconds) and would be lost.',
     });

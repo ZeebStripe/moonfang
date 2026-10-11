@@ -114,6 +114,23 @@ export async function pickFile(accept: string): Promise<File | null> {
 }
 
 /** Opens a folder picker and resolves with every file inside (paths in webkitRelativePath; empty when cancelled). */
+/**
+ * Opens a link in the user's own browser. The desktop app does that for window.open; the launcher's app window has
+ * no tabs, so there the local server opens it (see vite.config.ts), with a plain new tab as the fallback.
+ */
+export function openExternal(url: string) {
+  const tab = () => void window.open(url, '_blank', 'noopener');
+  if ('moonfangDesktop' in window) return tab();
+  fetch('/__moonfang/open', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ url }) })
+    .then((r) => !r.ok && tab())
+    .catch(tab);
+}
+
+/** A link that opens in the user's browser (see openExternal). */
+export function externalLink(url: string, label: string): HTMLAnchorElement {
+  return h('a', { href: url, rel: 'noopener', onclick: (e: MouseEvent) => (e.preventDefault(), openExternal(url)) }, label);
+}
+
 export function pickFolder(): Promise<File[]> {
   return new Promise((resolve) => {
     const input = h('input', { type: 'file', style: { display: 'none' } }) as HTMLInputElement;

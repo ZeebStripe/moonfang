@@ -1,6 +1,6 @@
 {
   "name": "moonfang",
-  "productName": "Moonfang 3D Textures",
+  "productName": "Moonfang 3D",
   "version": "0.1.0-beta",
   "private": true,
   "description": "Open source 3D texture painting tool (PBR layer painting, mesh-map baking, smart materials)",
@@ -33,7 +33,7 @@
   },
   "build": {
     "appId": "io.uwustud.moonfang",
-    "productName": "Moonfang 3D Textures",
+    "productName": "Moonfang 3D",
     "directories": {
       "output": "release"
     },
@@ -53,7 +53,7 @@
         "to": "LICENSE.moonfang.txt"
       }
     ],
-    "artifactName": "Moonfang-3D-Textures-${version}-${os}-${arch}.${ext}",
+    "artifactName": "Moonfang-3D-${version}-${os}-${arch}.${ext}",
     "win": {
       "target": [
         "nsis",
@@ -64,10 +64,10 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "artifactName": "Moonfang-3D-Textures-Setup-${version}.${ext}"
+      "artifactName": "Moonfang-3D-Setup-${version}.${ext}"
     },
     "portable": {
-      "artifactName": "Moonfang-3D-Textures-${version}-portable.${ext}"
+      "artifactName": "Moonfang-3D-${version}-portable.${ext}"
     },
     "linux": {
       "target": [
@@ -75,7 +75,7 @@
       ],
       "icon": "icon.png",
       "category": "Graphics",
-      "artifactName": "Moonfang-3D-Textures-${version}-linux-${arch}.${ext}"
+      "artifactName": "Moonfang-3D-${version}-linux-${arch}.${ext}"
     }
   }
 }

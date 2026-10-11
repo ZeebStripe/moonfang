@@ -2,7 +2,7 @@ import type { App } from '../app';
 import { downloadBlob, EXPORT_FORMATS, EXPORT_PRESETS, exportPrefixes, type ExportFormat } from '../engine/exporter';
 import { walkLayers } from '../engine/layers';
 import { loadDemoMesh, type DemoMeshId } from '../engine/meshLoader';
-import { checkbox, h, pickFile, pickFiles, pickFolder, selectField, slider } from './dom';
+import { checkbox, externalLink, h, openExternal, pickFile, pickFiles, pickFolder, selectField, slider } from './dom';
 import { fromFiles, MODEL_ACCEPT, openModelFiles, resolveModel } from './modelFiles';
 import { ICONS } from './icons';
 import { KOFI_URL, REPO_URL, VERSION_LABEL } from '../meta';
@@ -340,11 +340,11 @@ export function shortcutsDialog() {
 
 export function aboutDialog() {
   openModal(
-    'About Moonfang 3D Textures',
+    'About Moonfang 3D',
     h(
       'div',
       { class: 'form' },
-      h('p', {}, h('strong', {}, `Moonfang 3D Textures ${VERSION_LABEL}`)),
+      h('p', {}, h('strong', {}, `Moonfang 3D ${VERSION_LABEL}`)),
       h('p', {}, 'Moonfang is a free, open source (MIT) 3D texture painting tool for game assets.'),
       h(
         'ul',
@@ -358,13 +358,13 @@ export function aboutDialog() {
       ),
       h('p', { class: 'dim small' }, 'Built with three.js, three-mesh-bvh and fflate (MIT; see THIRD_PARTY_NOTICES.md).'),
       h('p', { class: 'dim small' }, 'Your work never leaves your computer: no accounts, no uploads, no analytics. The only network request is the update check.'),
-      h('p', {}, h('a', { href: REPO_URL, target: '_blank', rel: 'noopener' }, 'Source code on GitHub'), ' · ', h('a', { href: KOFI_URL, target: '_blank', rel: 'noopener' }, 'Support on Ko-fi')),
+      h('p', {}, externalLink(REPO_URL, 'Source code on GitHub'), ' · ', externalLink(KOFI_URL, 'Support on Ko-fi')),
     ),
   );
 }
 
 export function openKofi() {
-  window.open(KOFI_URL, '_blank', 'noopener');
+  openExternal(KOFI_URL);
 }
 
 export function displaySettings(app: App): HTMLElement {

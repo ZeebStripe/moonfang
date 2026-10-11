@@ -1,7 +1,7 @@
 import type { App } from '../app';
 import { REPO_URL, VERSION, versionLabel } from '../meta';
 import { openModal } from './actions';
-import { checkbox, h } from './dom';
+import { checkbox, h, openExternal } from './dom';
 
 /**
  * Asks GitHub for the newest published release and, if it is newer than this build, shows "A new version is
@@ -109,7 +109,7 @@ function showUpdate(rel: Release, manual: boolean) {
     manual ? [later, download] : [skip, later, download],
   );
   download.addEventListener('click', () => {
-    window.open(rel.html_url, '_blank', 'noopener');
+    openExternal(rel.html_url);
     close();
   });
   later.addEventListener('click', () => close());

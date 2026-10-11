@@ -1,9 +1,9 @@
-# Moonfang 3D Textures
+# Moonfang 3D
 
-**Moonfang 3D Textures** (Moonfang for short) is a free, open source 3D texture painting tool for game assets.
+**Moonfang 3D** (Moonfang for short) is a free, open source 3D texture painting tool for game assets.
 It runs as a desktop app or in the browser (WebGL2) and is built with TypeScript and three.js.
 
-![Moonfang 3D Textures with the Rusty Iron smart material on a torus knot](docs/screenshots/hero.png)
+![Moonfang 3D with the Rusty Iron smart material on a torus knot](docs/screenshots/hero.png)
 
 | | |
 | --- | --- |
@@ -80,10 +80,10 @@ It runs as a desktop app or in the browser (WebGL2) and is built with TypeScript
 
 Download the latest build from the [Releases page](https://github.com/ZeebStripe/moonfang/releases):
 
-- **Windows**: `Moonfang-3D-Textures-Setup-<version>.exe` installs it with a Start menu entry. `Moonfang-3D-Textures-<version>-portable.exe`
+- **Windows**: `Moonfang-3D-Setup-<version>.exe` installs it with a Start menu entry. `Moonfang-3D-<version>-portable.exe`
   runs without installing. The builds aren't code-signed yet, so Windows SmartScreen may warn the first time: choose
   *More info → Run anyway*.
-- **Linux**: `Moonfang-3D-Textures-<version>-linux-x86_64.AppImage`. Make it executable (`chmod +x`) and run it.
+- **Linux**: `Moonfang-3D-<version>-linux-x86_64.AppImage`. Make it executable (`chmod +x`) and run it.
 
 The desktop app works fully offline. It bundles its own Chromium, so it doesn't depend on your browser.
 

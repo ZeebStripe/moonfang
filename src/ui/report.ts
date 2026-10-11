@@ -2,13 +2,13 @@ import type { App } from '../app';
 import { errorLog, hasErrors } from '../errors';
 import { bugReportUrl, environmentInfo, REPORT_ENDPOINT, VERSION_LABEL } from '../meta';
 import { errorMessage, openModal } from './actions';
-import { checkbox, h } from './dom';
+import { checkbox, h, openExternal } from './dom';
 
 const isDesktop = () => !!(window as unknown as { moonfangDesktop?: unknown }).moonfangDesktop;
 
 /** Opens the GitHub issue form (needs a GitHub account; the user submits it there). */
 function openGithubForm(app: App) {
-  window.open(bugReportUrl(app.renderer.getContext(), errorLog()), '_blank', 'noopener');
+  openExternal(bugReportUrl(app.renderer.getContext(), errorLog()));
 }
 
 /**
@@ -89,7 +89,7 @@ export function reportBug(app: App) {
       app.toast(
         `Thanks! Your report was sent${data.number ? ` (#${data.number})` : ''}.`,
         'info',
-        data.url ? { label: 'View', run: () => window.open(data.url, '_blank', 'noopener') } : undefined,
+        data.url ? { label: 'View', run: () => openExternal(data.url!) } : undefined,
       );
     } catch (e) {
       send.disabled = false;
