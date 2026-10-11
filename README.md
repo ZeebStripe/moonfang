@@ -1,7 +1,16 @@
-# Moonfang
+# Moonfang 3D Textures
 
-A free, open source 3D texture painting tool for game assets.
-It runs in the browser (WebGL2) and is built with TypeScript and three.js.
+**Moonfang 3D Textures** (Moonfang for short) is a free, open source 3D texture painting tool for game assets.
+It runs as a desktop app or in the browser (WebGL2) and is built with TypeScript and three.js.
+
+![Moonfang 3D Textures with the Rusty Iron smart material on a torus knot](docs/screenshots/hero.png)
+
+| | |
+| --- | --- |
+| ![Cel Shaded Comic smart material on a vase](docs/screenshots/cel-shaded.png) | ![A model with two texture sets: worn painted steel and antique gold](docs/screenshots/texture-sets.png) |
+| Smart materials, here *Cel Shaded Comic*: ink outlines and light bands from baked mesh maps | One texture set per material, each with its own layer stack |
+| ![The export dialog with the glTF / Godot preset](docs/screenshots/export.png) | |
+| Export presets for Unreal, Unity, glTF/Godot, or a textured GLB | |
 
 > **Public beta (Beta 0.1.0).** Expect rough edges and please report what breaks:
 > **Help → Report a Bug** in the app, or [open an issue](https://github.com/ZeebStripe/moonfang/issues/new/choose).
@@ -66,15 +75,19 @@ It runs in the browser (WebGL2) and is built with TypeScript and three.js.
 
 Download the latest build from the [Releases page](https://github.com/ZeebStripe/moonfang/releases):
 
-- **Windows**: `Moonfang-Setup-<version>.exe` installs Moonfang with a Start menu entry. `Moonfang-<version>-portable.exe`
+- **Windows**: `Moonfang-3D-Textures-Setup-<version>.exe` installs it with a Start menu entry. `Moonfang-3D-Textures-<version>-portable.exe`
   runs without installing. The builds aren't code-signed yet, so Windows SmartScreen may warn the first time: choose
   *More info → Run anyway*.
-- **Linux**: `Moonfang-<version>-linux-x86_64.AppImage`. Make it executable (`chmod +x`) and run it.
+- **Linux**: `Moonfang-3D-Textures-<version>-linux-x86_64.AppImage`. Make it executable (`chmod +x`) and run it.
 
 The desktop app works fully offline. It bundles its own Chromium, so it doesn't depend on your browser.
 
 To build the desktop app yourself: `npm install`, then `npm run dist:win` (on Windows) or `npm run dist:linux` (on Linux).
 The packages land in `release/`. `npm run app` runs it without packaging.
+
+Bug reports: **Help → Report a Bug** sends reports through `report-relay/`, a tiny Cloudflare Worker that files them as
+GitHub issues (see [report-relay/README.md](report-relay/README.md) to set it up). Until its URL is set in
+`src/meta.ts`, the app opens the prefilled GitHub issue form instead.
 
 ### From source, in your browser
 
@@ -105,7 +118,7 @@ file, a model folder or a zipped model onto the viewport. The mesh needs non-ove
 | Mesh format | Notes |
 | --- | --- |
 | `.glb` | Recommended. |
-| `.gltf` | Select or drop it together with its `.bin` file(s), drop its whole folder, use **File → Open Mesh Folder…**, or open a `.zip` of it (as downloaded from Sketchfab and similar sites). If a `.bin` is missing, Moonfang asks for it. The model's own texture images aren't needed: Moonfang only uses the geometry, UVs and materials, and packs the rest into a single `.glb` inside the project. |
+| `.gltf` | Select or drop it together with its `.bin` file(s), drop its whole folder, use **File → Open Mesh Folder…**, or open a `.zip` of it (as downloaded from Sketchfab and similar sites). In the desktop app, opening just the `.gltf` is enough: its `.bin` files are read from the same folder. If a `.bin` is missing, Moonfang asks for it. The model's own texture images aren't needed: Moonfang only uses the geometry, UVs and materials, and packs the rest into a single `.glb` inside the project. |
 | `.obj` | Mesh only. The `.mtl` file is ignored. |
 | `.fbx` | Binary or ASCII. Skinned meshes are painted in their bind pose. |
 
@@ -205,9 +218,13 @@ Moonfang only goes online in these cases:
 - **Update check**: on start, it downloads the public list of Moonfang releases from GitHub to see whether a newer
   version exists. Nothing about you or your work is sent. Turn it off in the "new version" popup; **Help → Check for
   Updates** still works by hand.
-- **Links you click**: **Report a Bug** opens a GitHub issue form in your browser with the app version, browser,
-  graphics card and any errors from this session filled in. Nothing is sent until you review the form and submit it
-  yourself. Errors are only kept in memory while the app runs, never stored or sent automatically.
+- **Bug reports you send**: **Help → Report a Bug** opens a report form in the app. It shows exactly what will be sent
+  along with your text (app version, browser, graphics card and, if you tick the box, errors from this session), and
+  nothing leaves your computer until you press **Send**. Reports go privately to the developer through a small relay
+  server (`report-relay/`), which uses your IP address only briefly, to stop spam. You can also choose **Use GitHub
+  instead** to file a public issue yourself. Errors are only kept in memory while the app runs, never stored or sent
+  automatically.
+- **Links you click**: GitHub, Ko-fi and release pages open in your browser.
 
 ## Support
 

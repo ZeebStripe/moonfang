@@ -458,13 +458,28 @@ class StripScheduler {
   }
 }
 
-/** Resolves once the GPU has finished all submitted work (polled, so the main thread is not blocked). */
+/**
+ * Resolves once the GPU has finished all submitted work (polled, so the main thread is not blocked). In a hidden
+ * window (minimised, or covered by other windows) the browser stops updating fence status, which would stall the
+ * bake until the window is shown again, so a blocking finish is used there instead.
+ */
 async function gpuFinish(r: THREE.WebGLRenderer) {
   const gl = r.getContext() as WebGL2RenderingContext;
+  if (document.hidden) {
+    gl.finish();
+    return;
+  }
   const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
   if (!sync) return;
   gl.flush();
-  while (gl.clientWaitSync(sync, 0, 0) === gl.TIMEOUT_EXPIRED) await new Promise((res) => setTimeout(res, 2));
+  while (gl.clientWaitSync(sync, 0, 0) === gl.TIMEOUT_EXPIRED) {
+    // Hidden mid-wait: finish synchronously rather than wait for a status update that won't come.
+    if (document.hidden) {
+      gl.finish();
+      break;
+    }
+    await new Promise((res) => setTimeout(res, 2));
+  }
   gl.deleteSync(sync);
 }
 

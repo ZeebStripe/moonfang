@@ -1,7 +1,5 @@
 import * as THREE from 'three';
 import { zipSync, zlibSync } from 'fflate';
-import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js';
-import { EXRExporter, ZIP_COMPRESSION } from 'three/examples/jsm/exporters/EXRExporter.js';
 import { createRT, FullscreenPass, GLSL_NOISE, rawMaterial } from './gl';
 import type { PaintMesh } from './meshLoader';
 
@@ -237,6 +235,7 @@ export class Exporter {
         // EXRExporter writes GL row 0 last (standard image orientation); glTF UVs need row 0 first.
         if (gltfUVs) flipRowsInPlace(data, size, size);
         const tex = new THREE.DataTexture(data, size, size, THREE.RGBAFormat, THREE.FloatType);
+        const { EXRExporter, ZIP_COMPRESSION } = await import('three/examples/jsm/exporters/EXRExporter.js');
         files[`${name}.exr`] = await new EXRExporter().parse(tex, { type: THREE.HalfFloatType, compression: ZIP_COMPRESSION });
       }
     }
@@ -252,6 +251,7 @@ export class Exporter {
     geometry.translate(mesh.center.x, mesh.center.y, mesh.center.z);
     const out = new THREE.Mesh(geometry, materials);
     out.name = mesh.name;
+    const { GLTFExporter } = await import('three/examples/jsm/exporters/GLTFExporter.js');
     const result = await new GLTFExporter().parseAsync(out, { binary: true });
     geometry.dispose();
     return result as ArrayBuffer;

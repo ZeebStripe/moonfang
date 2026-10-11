@@ -15,7 +15,6 @@ import {
   openKofi,
   openModal,
   openProjectFile,
-  reportBug,
   saveProjectAction,
   shortcutsDialog,
 } from './actions';
@@ -23,6 +22,7 @@ import { h, icon, iconButton, selectField } from './dom';
 import { ICONS } from './icons';
 import { savesDialog, saveVersionDialog } from './saves';
 import { checkForUpdates } from './updates';
+import { reportBug } from './report';
 import { fromDropEntries, fromFiles, openModelFiles, zipKind } from './modelFiles';
 import { VERSION_LABEL } from '../meta';
 

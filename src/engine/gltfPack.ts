@@ -7,7 +7,8 @@
  * (.bin files) are required.
  */
 
-export type FileLookup = (path: string) => Promise<Uint8Array | undefined>;
+/** `path`: resolved relative path; `uri`: exactly as written in the .gltf. */
+export type FileLookup = (path: string, uri: string) => Promise<Uint8Array | undefined>;
 
 export interface PackResult {
   /** the .glb, or null when required files are missing */
@@ -90,7 +91,7 @@ export async function packGltf(gltfPath: string, gltfBytes: Uint8Array, lookup: 
       continue;
     }
     const path = resolveUri(gltfPath, b.uri);
-    const data = await lookup(path);
+    const data = await lookup(path, b.uri);
     if (!data) missing.push(path);
     else if (data.length < b.byteLength) throw new Error(`${path} is smaller than the model expects; it may be damaged or belong to another model.`);
     else datas.push(data.subarray(0, b.byteLength));

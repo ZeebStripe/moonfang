@@ -1,0 +1,15 @@
+# Moonfang bug-report relay. Setup: see README.md in this folder.
+name = "moonfang-reports"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+[vars]
+# Where reports go. A private repo keeps reports (they include system info) private.
+GITHUB_REPO = "ZeebStripe/moonfang-reports"
+# Set to "true" if GITHUB_REPO is public, so the app can show reporters the issue link.
+PUBLIC_REPO = "false"
+
+# Rate limiting (recommended). Create it with `npx wrangler kv namespace create RATE`, then paste the id below.
+# [[kv_namespaces]]
+# binding = "RATE"
+# id = "<id from the command above>"

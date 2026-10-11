@@ -1280,3 +1280,38 @@ table.shortcuts td {
   font-size: 11px;
   white-space: nowrap;
 }
+
+/* While a dialog is open, toasts move to the window's bottom-right corner (over the panels), clear of the dialog. */
+body:has(.modal-backdrop) .toasts {
+  right: 16px;
+  bottom: 34px;
+  z-index: 70;
+}
+
+.form.report textarea {
+  width: 100%;
+  resize: vertical;
+  font: inherit;
+  color: var(--text);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 6px 8px;
+}
+.report-preview {
+  max-height: 180px;
+  overflow: auto;
+  margin: 6px 0 0;
+  padding: 8px;
+  font-size: 11px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--panel-2);
+  border-radius: var(--radius);
+}
+.form.report .field:not(.check) {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 4px;
+}

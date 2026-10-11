@@ -13,7 +13,17 @@ export interface VFile {
   /** relative path with '/' separators, e.g. "car/scene.bin" */
   path: string;
   read(): Promise<Uint8Array>;
+  /** absolute path on disk (desktop app only; not for files from a zip) */
+  diskPath?: string;
 }
+
+/** Bridge from electron/preload.cjs (desktop app only). */
+interface DesktopBridge {
+  pathForFile(file: File): string;
+  readGltfBuffer(gltfPath: string, uri: string): Promise<Uint8Array | null>;
+}
+const desktop = (window as unknown as { moonfangDesktop?: DesktopBridge }).moonfangDesktop;
+const diskPathOf = (file: File) => desktop?.pathForFile(file) || undefined;
 
 /** What Open Mesh lets the user pick: models plus the files a .gltf may need, or a .zip of them. */
 export const MODEL_ACCEPT = '.glb,.gltf,.obj,.fbx,.bin,.zip,.png,.jpg,.jpeg,.webp,.ktx2';
@@ -25,7 +35,11 @@ const ext = (path: string) => path.split('.').pop()!.toLowerCase();
 const baseName = (path: string) => path.split('/').pop()!;
 
 export function fromFiles(files: File[]): VFile[] {
-  return files.map((f) => ({ path: (f.webkitRelativePath || f.name).replace(/\\/g, '/'), read: async () => new Uint8Array(await f.arrayBuffer()) }));
+  return files.map((f) => ({
+    path: (f.webkitRelativePath || f.name).replace(/\\/g, '/'),
+    read: async () => new Uint8Array(await f.arrayBuffer()),
+    diskPath: diskPathOf(f),
+  }));
 }
 
 /** Dropped files and folders (folders are walked recursively). Entries must be taken from the drop event synchronously. */
@@ -34,7 +48,7 @@ export async function fromDropEntries(entries: FileSystemEntry[]): Promise<VFile
   const walk = async (entry: FileSystemEntry): Promise<void> => {
     if (entry.isFile) {
       const file = await new Promise<File>((res, rej) => (entry as FileSystemFileEntry).file(res, rej));
-      out.push({ path: entry.fullPath.replace(/^\/+/, ''), read: async () => new Uint8Array(await file.arrayBuffer()) });
+      out.push({ path: entry.fullPath.replace(/^\/+/, ''), read: async () => new Uint8Array(await file.arrayBuffer()), diskPath: diskPathOf(file) });
     } else if (entry.isDirectory) {
       const reader = (entry as FileSystemDirectoryEntry).createReader();
       // readEntries returns the folder in batches; an empty batch means done.
@@ -92,17 +106,22 @@ function pickModel(files: VFile[]): { model: VFile; others: number } | null {
   return { model: models[0], others: models.length - 1 };
 }
 
-/** Finds a referenced file by its exact relative path, else by file name alone (when it is unambiguous). */
-function makeLookup(files: VFile[]) {
+/**
+ * Finds a referenced file by its exact relative path, else by file name alone (when it is unambiguous). In the
+ * desktop app, a .gltf opened from disk can also read its buffers straight from its own folder.
+ */
+function makeLookup(files: VFile[], gltf: VFile) {
   const byPath = new Map(files.map((f) => [f.path.toLowerCase(), f]));
   const byName = new Map<string, VFile[]>();
   for (const f of files) {
     const k = baseName(f.path).toLowerCase();
     byName.set(k, [...(byName.get(k) ?? []), f]);
   }
-  return async (path: string) => {
+  return async (path: string, uri: string) => {
     const hit = byPath.get(path.toLowerCase()) ?? (byName.get(baseName(path).toLowerCase())?.length === 1 ? byName.get(baseName(path).toLowerCase())![0] : undefined);
-    return hit?.read();
+    if (hit) return hit.read();
+    if (desktop && gltf.diskPath) return (await desktop.readGltfBuffer(gltf.diskPath, uri)) ?? undefined;
+    return undefined;
   };
 }
 
@@ -155,7 +174,7 @@ export async function resolveModel(app: App, files: VFile[]): Promise<{ name: st
   if (ext(model.path) !== 'gltf') return { name: baseName(model.path), bytes: await model.read() };
   const gltf = await model.read();
   for (;;) {
-    const res = await packGltf(model.path, gltf, makeLookup(set));
+    const res = await packGltf(model.path, gltf, makeLookup(set, model));
     if (res.bytes) return { name: baseName(model.path).replace(/\.gltf$/i, '.glb'), bytes: res.bytes };
     const added = await askForMissing(model.path, res.missing);
     if (!added) return null;

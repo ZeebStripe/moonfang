@@ -1,7 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
-import { HDRLoader } from 'three/examples/jsm/loaders/HDRLoader.js';
 
 export const VIEW_MODES = [
   ['material', 'Material'],
@@ -297,6 +296,7 @@ export class Viewport {
   async loadHDR(file: File) {
     const url = URL.createObjectURL(file);
     try {
+      const { HDRLoader } = await import('three/examples/jsm/loaders/HDRLoader.js');
       const hdr = await new HDRLoader().loadAsync(url);
       hdr.mapping = THREE.EquirectangularReflectionMapping;
       const env = this.pmrem.fromEquirectangular(hdr).texture;

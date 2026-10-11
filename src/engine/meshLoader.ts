@@ -1,7 +1,4 @@
 import * as THREE from 'three';
-import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
-import { OBJLoader } from 'three/examples/jsm/loaders/OBJLoader.js';
-import { FBXLoader } from 'three/examples/jsm/loaders/FBXLoader.js';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { MeshBVHUniformStruct } from 'three-mesh-bvh';
 import { autoSmoothCurvature, buildTopology, segmentBVH, sharpEdges, type Topology } from './meshAnalysis';
@@ -43,9 +40,19 @@ export const DEMO_MESHES: { id: DemoMeshId; label: string }[] = [
 /** Parses a model file into a scene graph (.glb, embedded .gltf, .obj, .fbx). */
 export async function parseModel(name: string, bytes: ArrayBuffer): Promise<THREE.Object3D> {
   const ext = name.split('.').pop()!.toLowerCase();
-  if (ext === 'glb' || ext === 'gltf') return (await new GLTFLoader().parseAsync(bytes, '')).scene;
-  if (ext === 'obj') return new OBJLoader().parse(new TextDecoder().decode(bytes));
-  if (ext === 'fbx') return new FBXLoader().parse(bytes, '');
+  // Loaders are fetched on first use; the demo meshes need none of them.
+  if (ext === 'glb' || ext === 'gltf') {
+    const { GLTFLoader } = await import('three/examples/jsm/loaders/GLTFLoader.js');
+    return (await new GLTFLoader().parseAsync(bytes, '')).scene;
+  }
+  if (ext === 'obj') {
+    const { OBJLoader } = await import('three/examples/jsm/loaders/OBJLoader.js');
+    return new OBJLoader().parse(new TextDecoder().decode(bytes));
+  }
+  if (ext === 'fbx') {
+    const { FBXLoader } = await import('three/examples/jsm/loaders/FBXLoader.js');
+    return new FBXLoader().parse(bytes, '');
+  }
   throw new Error(`Unsupported mesh format '.${ext}'. Use .glb, .gltf (embedded), .obj or .fbx.`);
 }
 

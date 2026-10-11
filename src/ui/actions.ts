@@ -5,8 +5,7 @@ import { loadDemoMesh, type DemoMeshId } from '../engine/meshLoader';
 import { checkbox, h, pickFile, pickFiles, pickFolder, selectField, slider } from './dom';
 import { fromFiles, MODEL_ACCEPT, openModelFiles, resolveModel } from './modelFiles';
 import { ICONS } from './icons';
-import { bugReportUrl, KOFI_URL, REPO_URL, VERSION_LABEL } from '../meta';
-import { errorLog } from '../errors';
+import { KOFI_URL, REPO_URL, VERSION_LABEL } from '../meta';
 
 export function errorMessage(e: unknown) {
   return e instanceof Error ? e.message : String(e);
@@ -61,8 +60,17 @@ export function safeName(s: string) {
 
 // ---------------------------------------------------------------------------------- dialogs
 
-/** @param centerIn center the dialog on this element (e.g. the 3D viewport) instead of the whole window */
-export function openModal(title: string, body: HTMLElement, footer: HTMLElement[] = [], onClose?: () => void, centerIn?: HTMLElement): () => void {
+/**
+ * @param centerIn element to center the dialog on; defaults to the 3D viewport, which keeps dialogs clear of the
+ *                 panels (and of the toasts, which move to the window corner while a dialog is open)
+ */
+export function openModal(
+  title: string,
+  body: HTMLElement,
+  footer: HTMLElement[] = [],
+  onClose?: () => void,
+  centerIn: HTMLElement | null = document.getElementById('viewport-wrap'),
+): () => void {
   let closed = false;
   const close = () => {
     if (closed) return;
@@ -75,6 +83,7 @@ export function openModal(title: string, body: HTMLElement, footer: HTMLElement[
   const place = () => {
     if (!centerIn) return;
     const r = centerIn.getBoundingClientRect();
+    if (!r.width || !r.height) return; // not laid out (hidden window): stay window-centered
     Object.assign(modal.style, {
       position: 'fixed',
       left: `${r.left + r.width / 2}px`,
@@ -327,11 +336,11 @@ export function shortcutsDialog() {
 
 export function aboutDialog() {
   openModal(
-    'About Moonfang',
+    'About Moonfang 3D Textures',
     h(
       'div',
       { class: 'form' },
-      h('p', {}, h('strong', {}, `Moonfang ${VERSION_LABEL}`)),
+      h('p', {}, h('strong', {}, `Moonfang 3D Textures ${VERSION_LABEL}`)),
       h('p', {}, 'Moonfang is a free, open source (MIT) 3D texture painting tool for game assets.'),
       h(
         'ul',
@@ -347,11 +356,6 @@ export function aboutDialog() {
       h('p', {}, h('a', { href: REPO_URL, target: '_blank', rel: 'noopener' }, 'Source code on GitHub'), ' · ', h('a', { href: KOFI_URL, target: '_blank', rel: 'noopener' }, 'Support on Ko-fi')),
     ),
   );
-}
-
-/** Opens the GitHub bug form with version, browser and GPU filled in. */
-export function reportBug(app: App) {
-  window.open(bugReportUrl(app.renderer.getContext(), errorLog()), '_blank', 'noopener');
 }
 
 export function openKofi() {

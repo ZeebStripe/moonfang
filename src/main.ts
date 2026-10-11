@@ -3,7 +3,7 @@ import { App } from './app';
 import { loadDemoMesh } from './engine/meshLoader';
 import { deviceNotice, mountDropZone, mountGpuLossDialog, mountProgress, mountStatusbar, mountToasts, mountToolbar, mountTopbar } from './ui/chrome';
 import { setupAutosave } from './ui/autosave';
-import { reportBug } from './ui/actions';
+import { reportBug } from './ui/report';
 import { checkForUpdates } from './ui/updates';
 import { installErrorCapture, onErrorRecorded } from './errors';
 import { bindViewportInput } from './ui/input';
