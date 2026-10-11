@@ -70,6 +70,12 @@ export class Viewport {
   /** orthographic twin of `camera` (numpad 5); the controls drive whichever one is in use */
   orthoCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0.01, 100);
   ortho = false;
+  /**
+   * An environment background can't be drawn through an orthographic camera (it collapses to one colour), so in
+   * orthographic views it is drawn first through this perspective camera, turned the same way.
+   */
+  private bgScene = new THREE.Scene();
+  private bgCamera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
   /** the named axis view the camera is in, or null once it is orbited away */
   axisView: AxisView | null = null;
   /** ortho was switched on by an axis view (Blender's auto perspective): orbiting away switches back */
@@ -585,6 +591,21 @@ export class Viewport {
     r.setRenderTarget(null);
     r.clear(true, true, true);
     if (this.uvView) r.render(this.uvScene, this.uvCamera);
-    else r.render(this.scene, this.view3D);
+    else if (this.ortho && this.scene.background instanceof THREE.Texture) {
+      const bg = this.scene.background;
+      const b = this.bgScene;
+      b.background = bg;
+      b.backgroundBlurriness = this.scene.backgroundBlurriness;
+      b.backgroundIntensity = this.scene.backgroundIntensity;
+      b.backgroundRotation.copy(this.scene.backgroundRotation);
+      this.bgCamera.fov = this.camera.fov;
+      this.bgCamera.aspect = this.camera.aspect;
+      this.bgCamera.updateProjectionMatrix();
+      this.bgCamera.quaternion.copy(this.orthoCamera.quaternion);
+      r.render(b, this.bgCamera);
+      this.scene.background = null;
+      r.render(this.scene, this.orthoCamera);
+      this.scene.background = bg;
+    } else r.render(this.scene, this.view3D);
   }
 }
