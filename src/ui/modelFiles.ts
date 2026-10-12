@@ -1,4 +1,4 @@
-import { unzipSync } from 'fflate';
+import { assertArchiveSize, unzipBounded } from '../engine/archive';
 import type { App } from '../app';
 import { packGltf } from '../engine/gltfPack';
 import { loadMeshFile } from '../engine/meshLoader';
@@ -15,6 +15,8 @@ export interface VFile {
   read(): Promise<Uint8Array>;
   /** absolute path on disk (desktop app only; not for files from a zip) */
   diskPath?: string;
+  /** Known size before reading a file from disk. */
+  size?: number;
 }
 
 /** Bridge from electron/preload.cjs (desktop app only). */
@@ -39,6 +41,7 @@ export function fromFiles(files: File[]): VFile[] {
     path: (f.webkitRelativePath || f.name).replace(/\\/g, '/'),
     read: async () => new Uint8Array(await f.arrayBuffer()),
     diskPath: diskPathOf(f),
+    size: f.size,
   }));
 }
 
@@ -48,7 +51,7 @@ export async function fromDropEntries(entries: FileSystemEntry[]): Promise<VFile
   const walk = async (entry: FileSystemEntry): Promise<void> => {
     if (entry.isFile) {
       const file = await new Promise<File>((res, rej) => (entry as FileSystemFileEntry).file(res, rej));
-      out.push({ path: entry.fullPath.replace(/^\/+/, ''), read: async () => new Uint8Array(await file.arrayBuffer()), diskPath: diskPathOf(file) });
+      out.push({ path: entry.fullPath.replace(/^\/+/, ''), read: async () => new Uint8Array(await file.arrayBuffer()), diskPath: diskPathOf(file), size: file.size });
     } else if (entry.isDirectory) {
       const reader = (entry as FileSystemDirectoryEntry).createReader();
       // readEntries returns the folder in batches; an empty batch means done.
@@ -66,7 +69,7 @@ export async function fromDropEntries(entries: FileSystemEntry[]): Promise<VFile
 /** File names inside a zip, without extracting anything. */
 function zipNames(bytes: Uint8Array): string[] {
   const names: string[] = [];
-  unzipSync(bytes, { filter: (f) => (names.push(f.name), false) });
+  unzipBounded(bytes, () => false, (f) => names.push(f.name));
   return names;
 }
 
@@ -87,7 +90,8 @@ async function expandZips(files: VFile[]): Promise<VFile[]> {
       continue;
     }
     const dir = f.path.includes('/') ? f.path.slice(0, f.path.lastIndexOf('/') + 1) : '';
-    const entries = unzipSync(await f.read(), { filter: (z) => !z.name.endsWith('/') && !IMAGE_RE.test(z.name) });
+    if (f.size !== undefined) assertArchiveSize(f.size);
+    const entries = unzipBounded(await f.read(), (z) => !z.name.endsWith('/') && !IMAGE_RE.test(z.name));
     for (const [name, data] of Object.entries(entries)) out.push({ path: dir + name, read: async () => data });
   }
   return out;

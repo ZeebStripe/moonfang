@@ -25,6 +25,7 @@ import { savesDialog, saveVersionDialog } from './saves';
 import { checkForUpdates } from './updates';
 import { reportBug } from './report';
 import { fromDropEntries, fromFiles, openModelFiles, zipKind } from './modelFiles';
+import { assertArchiveSize } from '../engine/archive';
 import { VERSION_LABEL } from '../meta';
 
 type MenuItem = { label: string; action: () => void; shortcut?: string } | 'sep' | { heading: string };
@@ -243,6 +244,7 @@ export function mountDropZone(app: App, target: HTMLElement) {
       // A .zip is a project, a material library or a zipped model: tell by its contents.
       let kind: ReturnType<typeof zipKind>;
       try {
+        assertArchiveSize(file.size);
         kind = zipKind(new Uint8Array(await file.arrayBuffer()));
       } catch (err) {
         return app.toast(`Could not read ${file.name}: ${err instanceof Error ? err.message : err}`, 'error');

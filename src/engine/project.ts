@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { strToU8, strFromU8, unzipSync, zipSync } from 'fflate';
+import { strToU8, strFromU8, zipSync } from 'fflate';
+import { assertMetadataSize, assertUnpackedFiles, unzipBounded } from './archive';
 import { Copier, readRGBA8 } from './gl';
 import {
   PAINT_TARGETS,
@@ -110,9 +111,12 @@ export function collectProjectFiles(renderer: THREE.WebGLRenderer, s: ProjectSta
     highPoly = { name: s.highPoly.name, path: `highpoly/${s.highPoly.name}` };
     files[highPoly.path] = new Uint8Array(s.highPoly.bytes);
   }
-  const json: ProjectJson = { format: PROJECT_FORMAT, version: VERSION, sets, mesh, bake: s.bake, highPoly, composite: s.composite, brush: s.brush, textures };
-  files['project.json'] = strToU8(JSON.stringify(json, null, 1));
   renderer.setRenderTarget(null);
+  const json: ProjectJson = { format: PROJECT_FORMAT, version: VERSION, sets, mesh, bake: s.bake, highPoly, composite: s.composite, brush: s.brush, textures };
+  projectSets(json);
+  files['project.json'] = strToU8(JSON.stringify(json, null, 1));
+  assertMetadataSize(files['project.json'].length);
+  assertUnpackedFiles(files);
   return files;
 }
 
@@ -125,8 +129,9 @@ export interface LoadedProject {
 }
 
 export function readProject(bytes: Uint8Array): LoadedProject {
-  const files = unzipSync(bytes);
+  const files = unzipBounded(bytes);
   if (!files['project.json']) throw new Error('Not a Moonfang project (project.json missing).');
+  assertMetadataSize(files['project.json'].length);
   const json = JSON.parse(strFromU8(files['project.json'])) as ProjectJson;
   if (json.format !== PROJECT_FORMAT) throw new Error('Not a Moonfang project.');
   if (json.version > VERSION) throw new Error(`Project was saved by a newer version (format ${json.version}).`);
@@ -147,7 +152,21 @@ export function readProject(bytes: Uint8Array): LoadedProject {
 
 /** The project's texture sets (a version-1 project is a single set). */
 export function projectSets(json: ProjectJson): SerializedSet[] {
-  return json.sets ?? [{ name: 'Main', texSize: json.texSize ?? 2048, layers: json.layers ?? [] }];
+  const sets = json.sets ?? [{ name: 'Main', texSize: json.texSize ?? 2048, layers: json.layers ?? [] }];
+  if (!Array.isArray(sets) || sets.length > 64) throw new Error('Project has too many texture sets.');
+  let layers = 0;
+  const checkLayers = (items: SerializedLayer[], depth = 0) => {
+    if (!Array.isArray(items) || depth > 32) throw new Error('Project has an invalid layer stack.');
+    for (const layer of items) {
+      if (++layers > 256) throw new Error('Project has too many layers.');
+      if (layer.kind === 'group') checkLayers(layer.children, depth + 1);
+    }
+  };
+  for (const set of sets) {
+    if (!Number.isInteger(set.texSize) || set.texSize < 1 || set.texSize > 4096) throw new Error('Project texture size is out of range.');
+    checkLayers(set.layers);
+  }
+  return sets;
 }
 
 /** Recreates one set's GPU layers at `size` (the size the set was saved with). */

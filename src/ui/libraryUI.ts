@@ -3,7 +3,7 @@ import type { MaterialPreset, SmartMaterial } from '../data/materials';
 import type { Decal } from '../engine/decals';
 import { downloadBlob } from '../engine/exporter';
 import { renderMaterialThumbnails } from '../engine/thumbnails';
-import { importLibraryAction, openModal, safeName } from './actions';
+import { errorMessage, importLibraryAction, openModal, safeName } from './actions';
 import { h } from './dom';
 
 /** A material or smart material in the shelf (built-in, or the user's own: `custom`), or one of the user's decals. */
@@ -66,8 +66,12 @@ export function exportItems(app: App, items: LibraryItem[], fileName?: string) {
   const smart = items.filter(isSmart);
   const decals = items.filter(isDecal);
   const name = fileName ?? (items.length === 1 ? safeName(items[0].name) : 'my_materials');
-  downloadBlob(app.library.exportFile(mats, smart, decals) as BlobPart, `${name}.mflib`, 'application/zip');
-  app.toast(`Exported ${items.length === 1 ? `"${items[0].name}"` : `${items.length} items`} — share the .mflib file; it can be imported with Library ▾ → Import or dropped onto Moonfang.`);
+  try {
+    downloadBlob(app.library.exportFile(mats, smart, decals) as BlobPart, `${name}.mflib`, 'application/zip');
+    app.toast(`Exported ${items.length === 1 ? `"${items[0].name}"` : `${items.length} items`} — share the .mflib file; it can be imported with Library ▾ → Import or dropped onto Moonfang.`);
+  } catch (e) {
+    app.toast(`Could not export library: ${errorMessage(e)}`, 'error');
+  }
 }
 
 export function duplicateItem(app: App, item: MaterialPreset | SmartMaterial) {

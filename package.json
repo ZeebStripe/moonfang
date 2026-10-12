@@ -14,6 +14,7 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
+    "test": "node --test tests/archive.test.mjs",
     "app": "vite build && electron .",
     "dist:win": "npm run build && electron-builder --win --publish never",
     "dist:linux": "npm run build && electron-builder --linux --publish never"
