@@ -1,5 +1,6 @@
 import * as THREE from 'three';
-import { strFromU8, strToU8, unzipSync, zipSync } from 'fflate';
+import { strFromU8, strToU8, zipSync } from 'fflate';
+import { assertArchiveSize, assertMetadataSize, assertUnpackedFiles, unzipBounded } from './archive';
 import type { MaterialPreset, SmartMaterial } from '../data/materials';
 import type { Decal } from './decals';
 import { MAP_KEYS, type MaterialMaps } from './layers';
@@ -426,17 +427,25 @@ export class Library {
     }
     const json: LibraryJson = { format: LIB_FORMAT, version: 1, materials, smartMaterials: smart, decals, textures };
     files['library.json'] = strToU8(JSON.stringify(json, null, 1));
-    return zipSync(files, { level: 0 });
+    assertMetadataSize(files['library.json'].length);
+    assertUnpackedFiles(files);
+    const bytes = zipSync(files, { level: 0 });
+    assertArchiveSize(bytes.length);
+    return bytes;
   }
 
   /** Imports a .mflib/.zip (with textures) or a plain library .json. Returns counts. */
   async importFile(name: string, bytes: Uint8Array): Promise<{ materials: number; smart: number; decals: number }> {
     let json: LibraryJson;
     let files: Record<string, Uint8Array> = {};
-    if (/\.json$/i.test(name)) json = JSON.parse(strFromU8(bytes));
+    if (/\.json$/i.test(name)) {
+      assertMetadataSize(bytes.length);
+      json = JSON.parse(strFromU8(bytes));
+    }
     else {
-      files = unzipSync(bytes);
+      files = unzipBounded(bytes);
       if (!files['library.json']) throw new Error('library.json missing — not a Moonfang library.');
+      assertMetadataSize(files['library.json'].length);
       json = JSON.parse(strFromU8(files['library.json']));
     }
     if (json.format !== LIB_FORMAT) throw new Error('Not a Moonfang material library.');

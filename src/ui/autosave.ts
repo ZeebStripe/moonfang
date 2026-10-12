@@ -1,4 +1,5 @@
 import { zip } from 'fflate';
+import { assertArchiveSize } from '../engine/archive';
 import type { App } from '../app';
 import { loadDemoMesh } from '../engine/meshLoader';
 import { addSave, dismissAutosave, pendingAutosave, readSave, requestPersistentStorage, type SaveMeta } from '../engine/saves';
@@ -10,38 +11,59 @@ const INTERVAL_MS = 30_000;
 
 /** Revision of the document as of the last snapshot (autosave or version). */
 let saved = -1;
-let saving: Promise<void> | null = null;
+let savedSettings = '';
+let saving: Promise<boolean> | null = null;
 /** Autosave failures in a row (the warning is shown once per streak). */
 let failures = 0;
 
 /** Zips the current project (GPU readback is synchronous; compression runs in fflate's workers). */
 async function snapshot(app: App): Promise<Uint8Array> {
   const files = app.projectFiles();
-  return new Promise<Uint8Array>((res, rej) => zip(files, { level: 1 }, (err, out) => (err ? rej(err) : res(out))));
+  return new Promise<Uint8Array>((res, rej) =>
+    zip(files, { level: 1 }, (err, out) => {
+      if (err) return rej(err);
+      try {
+        assertArchiveSize(out.length);
+        res(out);
+      } catch (e) {
+        rej(e);
+      }
+    }),
+  );
 }
 
 function canSnapshot(app: App) {
   return !!app.mesh && !app.busy && !app.painter.isPainting && !app.contextLost;
 }
 
+/** Brush and bake controls are saved with the project even when no layer needs recompositing. */
+function settingsFingerprint(app: App): string {
+  return JSON.stringify([app.brush, app.bake, app.composite]);
+}
+
 /** Autosaves now if anything changed since the last snapshot. */
-export async function autosaveNow(app: App, reason = 'manual'): Promise<void> {
+export async function autosaveNow(app: App, reason = 'manual'): Promise<boolean> {
   if (saving) {
     if (reason === 'timer' || reason === 'hidden') return saving;
     // Restoring or opening something else: the snapshot in flight may predate the latest edits, so save again after it.
     await saving;
     return autosaveNow(app, reason);
   }
-  if (!canSnapshot(app) || app.revision === saved) return;
+  if (!app.mesh) return true;
+  if (!canSnapshot(app)) return false;
+  const settings = settingsFingerprint(app);
+  if (app.revision === saved && settings === savedSettings) return true;
   const rev = app.revision;
   saving = (async () => {
     try {
       const bytes = await snapshot(app);
       await addSave('auto', app.mesh!.name, bytes);
       saved = rev;
+      savedSettings = settings;
       app.lastAutosave = Date.now();
       failures = 0;
       if (reason === 'timer') app.emit('autosave');
+      return true;
     } catch (e) {
       console.warn('Autosave failed', e);
       if (failures++ === 0) {
@@ -50,6 +72,7 @@ export async function autosaveNow(app: App, reason = 'manual'): Promise<void> {
           run: () => saveProjectAction(app),
         });
       }
+      return false;
     } finally {
       saving = null;
     }
@@ -61,8 +84,10 @@ export async function autosaveNow(app: App, reason = 'manual'): Promise<void> {
 export async function saveVersion(app: App, note?: string): Promise<SaveMeta | null> {
   if (!canSnapshot(app)) return null;
   const rev = app.revision;
+  const settings = settingsFingerprint(app);
   const meta = await addSave('version', app.mesh!.name, await snapshot(app), note);
   saved = rev;
+  savedSettings = settings;
   requestPersistentStorage();
   return meta;
 }
@@ -74,7 +99,10 @@ export async function restoreSave(app: App, meta: SaveMeta): Promise<boolean> {
     app.toast('That save could not be found.', 'error');
     return false;
   }
-  await autosaveNow(app, 'restore');
+  if (!(await autosaveNow(app, 'restore'))) {
+    app.toast('Could not back up the current project. Save it to a file before restoring another version.', 'error');
+    return false;
+  }
   try {
     await app.loadProject(bytes);
     app.toast(`Restored ${describeSave(meta)}`);
@@ -105,8 +133,14 @@ export async function setupAutosave(app: App): Promise<boolean> {
   }
 
   saved = app.revision;
+  savedSettings = settingsFingerprint(app);
   // A freshly loaded mesh or project has nothing worth saving over an older session, so treat it as clean.
-  app.on((k) => k === 'mesh' && (saved = app.revision));
+  app.on((k) => {
+    if (k === 'mesh') {
+      saved = app.revision;
+      savedSettings = settingsFingerprint(app);
+    }
+  });
   // Opening another mesh or project replaces the document: snapshot the current one first.
   app.beforeReplace = () => autosaveNow(app, 'replace');
   setInterval(() => void autosaveNow(app, 'timer'), INTERVAL_MS);
@@ -114,7 +148,7 @@ export async function setupAutosave(app: App): Promise<boolean> {
   // Closing the window with changes newer than the last snapshot: let the browser ask first. After a GPU reset the
   // document is gone anyway, so don't hold the window.
   window.addEventListener('beforeunload', (e) => {
-    if (app.mesh && app.revision !== saved && !app.contextLost) e.preventDefault();
+    if (app.mesh && !app.contextLost && (app.revision !== saved || settingsFingerprint(app) !== savedSettings)) e.preventDefault();
   });
   return handled;
 }

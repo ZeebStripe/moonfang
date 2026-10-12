@@ -1,4 +1,5 @@
 import type { App } from '../app';
+import { assertArchiveSize } from '../engine/archive';
 import { downloadBlob, EXPORT_FORMATS, EXPORT_PRESETS, exportPrefixes, type ExportFormat } from '../engine/exporter';
 import { walkLayers } from '../engine/layers';
 import { loadDemoMesh, type DemoMeshId } from '../engine/meshLoader';
@@ -26,7 +27,11 @@ export async function openMeshFolderDialog(app: App) {
 
 export async function openDemo(app: App, id: DemoMeshId) {
   if (app.busy) return;
-  await app.openMesh(loadDemoMesh(id), 'reset');
+  try {
+    await app.openMesh(loadDemoMesh(id), 'reset');
+  } catch (e) {
+    app.toast(`Could not open demo: ${errorMessage(e)}`, 'error');
+  }
 }
 
 export async function openProjectDialog(app: App) {
@@ -37,6 +42,7 @@ export async function openProjectDialog(app: App) {
 export async function openProjectFile(app: App, file: File) {
   if (app.busy) return;
   try {
+    assertArchiveSize(file.size);
     await app.loadProject(new Uint8Array(await file.arrayBuffer()));
     app.toast(`Opened project ${file.name}`);
   } catch (e) {
@@ -45,7 +51,7 @@ export async function openProjectFile(app: App, file: File) {
 }
 
 export function saveProjectAction(app: App) {
-  if (!app.mesh || app.busy) return;
+  if (!app.mesh || busyWarning(app)) return;
   try {
     const data = app.saveProject();
     downloadBlob(data as BlobPart, `${safeName(app.mesh.name)}.mfp`, 'application/zip');
@@ -439,6 +445,7 @@ export async function importLibraryAction(app: App, file?: File | null) {
   file ??= await pickFile('.mflib,.zip,.json');
   if (!file) return;
   try {
+    if (!/\.json$/i.test(file.name)) assertArchiveSize(file.size);
     const r = await app.library.importFile(file.name, new Uint8Array(await file.arrayBuffer()));
     app.toast(`Imported ${r.materials} material(s), ${r.smart} smart material(s)${r.decals ? ` and ${r.decals} decal(s)` : ''} from ${file.name}`);
   } catch (e) {
@@ -449,8 +456,12 @@ export async function importLibraryAction(app: App, file?: File | null) {
 export function exportLibraryAction(app: App) {
   const lib = app.library;
   if (!lib.materials.length && !lib.smart.length) return app.toast('Your library is empty — import or save a material first.', 'warn');
-  downloadBlob(lib.exportFile() as BlobPart, 'my_materials.mflib', 'application/zip');
-  app.toast(`Exported ${lib.materials.length} material(s) and ${lib.smart.length} smart material(s)`);
+  try {
+    downloadBlob(lib.exportFile() as BlobPart, 'my_materials.mflib', 'application/zip');
+    app.toast(`Exported ${lib.materials.length} material(s) and ${lib.smart.length} smart material(s)`);
+  } catch (e) {
+    app.toast(`Could not export library: ${errorMessage(e)}`, 'error');
+  }
 }
 
 export function saveMaterialDialog(app: App) {

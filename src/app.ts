@@ -1,4 +1,5 @@
 import * as THREE from 'three';
+import { assertArchiveSize } from './engine/archive';
 import { Compositor, type CompositeSettings } from './engine/compositor';
 import { Exporter } from './engine/exporter';
 import { Copier, createRT, FullscreenPass } from './engine/gl';
@@ -345,7 +346,13 @@ export class App {
   }
 
   /** Runs before the open document is replaced by another mesh or project (autosave snapshots it). */
-  beforeReplace: (() => Promise<void>) | null = null;
+  beforeReplace: (() => Promise<boolean>) | null = null;
+
+  private async protectBeforeReplace() {
+    if (this.beforeReplace && !(await this.beforeReplace())) {
+      throw new Error('Could not back up the current project. Save it to a file before opening another.');
+    }
+  }
 
   /** Bumped on every change to the document; autosave compares against it. */
   revision = 0;
@@ -383,7 +390,7 @@ export class App {
    */
   async openMesh(mesh: PaintMesh, layers: 'reset' | 'keep' | (Layer[] | null)[] = 'reset', sizes?: number[]) {
     // Ready-made stacks come from loadProject, which has run the hook before changing anything.
-    if (!Array.isArray(layers)) await this.beforeReplace?.().catch(() => undefined);
+    if (!Array.isArray(layers)) await this.protectBeforeReplace();
     this.ready = false;
     const old = this.sets;
     const keep = layers === 'keep' && old.length === mesh.sets.length;
@@ -504,6 +511,7 @@ export class App {
     const next = file ? await HighPoly.load(file.name, file.bytes, this.mesh) : null;
     this.highPoly?.dispose();
     this.highPoly = next;
+    this.revision++;
     this.emit('settings');
   }
 
@@ -1433,7 +1441,9 @@ export class App {
 
   // ---------------------------------------------------------------- project IO
   saveProject(): Uint8Array {
-    return zipSync(this.projectFiles(), { level: 6 });
+    const bytes = zipSync(this.projectFiles(), { level: 6 });
+    assertArchiveSize(bytes.length);
+    return bytes;
   }
 
   /** Project contents before zipping (GPU readback happens here; zip can then run in a worker). */
@@ -1454,7 +1464,7 @@ export class App {
 
   async loadProject(bytes: Uint8Array) {
     const p = readProject(bytes);
-    await this.beforeReplace?.().catch(() => undefined);
+    await this.protectBeforeReplace();
     const psets = projectSets(p.json);
     this.setProgress(true, 'Loading project', 0);
     let mesh: PaintMesh;

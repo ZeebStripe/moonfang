@@ -95,6 +95,9 @@ The app isn't among the repository's files above; it is only on the Releases pag
 - **Autosave**: every 30 seconds to browser storage, with a restore prompt the next time you start.
 - **Texture resolution**: 512–4096, and existing layers are resampled when you change it.
 
+Imported project, library and model archives are limited to 512 MB compressed, 1 GB expanded, 512 MB per file and
+2,048 entries. Larger archives need to be reduced before opening them in Moonfang.
+
 ## Getting started
 
 ### Desktop app (recommended)
