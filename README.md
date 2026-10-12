@@ -18,7 +18,7 @@ The app isn't among the repository's files above; it is only on the Releases pag
 | ![The export dialog with the glTF / Godot preset](docs/screenshots/export.png) | |
 | Export presets for Unreal, Unity, glTF/Godot, or a textured GLB | |
 
-> **Public beta (Beta 0.1.0).** Expect rough edges and please report what breaks:
+> **Public beta (Beta 0.1.1).** Expect rough edges and please report what breaks:
 > **Help → Report a Bug** in the app, or [open an issue](https://github.com/ZeebStripe/moonfang/issues/new/choose).
 
 ## Features
