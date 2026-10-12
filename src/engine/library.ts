@@ -348,6 +348,13 @@ export class Library {
     this.changed();
   }
 
+  /** Replaces a material in place (keeps its position in the shelf). */
+  updateMaterial(m: MaterialPreset) {
+    if (!this.materials.some((x) => x.id === m.id)) return this.addMaterial(m);
+    this.materials = this.materials.map((x) => (x.id === m.id ? { ...m, custom: true } : x));
+    this.changed();
+  }
+
   addSmart(s: SmartMaterial) {
     this.smart = [...this.smart.filter((x) => x.id !== s.id), { ...s, custom: true }];
     this.changed();

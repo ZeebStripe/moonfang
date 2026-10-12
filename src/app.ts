@@ -1034,7 +1034,6 @@ export class App {
       values: structuredClone(DEFAULT_VALUES),
     };
     this.library.addMaterial(m);
-    this.toast(`Added "${m.name}" to My materials. Use its small + to add it as a layer, change it, then press Update in the layer's panel.`);
     return m;
   }
 

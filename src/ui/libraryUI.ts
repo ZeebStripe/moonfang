@@ -4,7 +4,7 @@ import type { Decal } from '../engine/decals';
 import { downloadBlob } from '../engine/exporter';
 import { renderMaterialThumbnails } from '../engine/thumbnails';
 import { errorMessage, importLibraryAction, openModal, safeName } from './actions';
-import { h } from './dom';
+import { colorField, h, slider } from './dom';
 
 /** A material or smart material in the shelf (built-in, or the user's own: `custom`), or one of the user's decals. */
 export type LibraryItem = MaterialPreset | SmartMaterial | Decal;
@@ -102,6 +102,63 @@ export function renameDialog(app: App, item: LibraryItem) {
   name.select();
 }
 
+/**
+ * Edits one of the user's materials in place: name, color, roughness, metallic, height and variation, with a live
+ * preview. Channels that come from a texture show the texture instead (the maps are not changed here). Layers that
+ * already use the material keep their own settings until they are updated from it.
+ */
+export function editMaterialDialog(app: App, item: MaterialPreset) {
+  const draft: MaterialPreset = structuredClone(item);
+  const v = draft.values;
+  const maps = draft.maps;
+  const name = h('input', { type: 'text', value: draft.name, maxLength: 60 }) as HTMLInputElement;
+  const preview = h('img', { class: 'mat-edit-preview', alt: '', draggable: false }) as HTMLImageElement;
+  let queued = 0;
+  const refresh = () => {
+    window.clearTimeout(queued);
+    queued = window.setTimeout(() => {
+      if (!app.textures.ready(maps)) return;
+      [preview.src] = renderMaterialThumbnails(app.renderer, app.viewport.scene.environment, [
+        {
+          values: v,
+          color: app.textures.get(maps?.color),
+          roughness: maps?.gloss ? null : app.textures.get(maps?.roughness),
+          metallic: app.textures.get(maps?.metallic),
+          tiling: draft.tiling,
+        },
+      ]);
+    }, 30);
+  };
+  const tex = (label: string, id: string | undefined, field: () => HTMLElement) =>
+    id ? h('div', { class: 'field' }, h('label', {}, label), h('span', { class: 'tex-chip' }, app.textures.asset(id)?.name ?? 'texture')) : field();
+  const num = (label: string, key: 'roughness' | 'metallic' | 'height', title?: string) =>
+    slider(label, { value: v[key], min: 0, max: 1, title, onInput: (x) => ((v[key] = x), refresh()) });
+  const body = h(
+    'div',
+    { class: 'form mat-edit' },
+    h('div', { class: 'mat-edit-head' }, preview, h('div', { class: 'field' }, h('label', {}, 'Name'), name)),
+    colorField(maps?.color ? 'Tint' : 'Base Color', v.color, (c) => ((v.color = c), refresh())),
+    tex('Roughness', maps?.roughness, () => num('Roughness', 'roughness')),
+    tex('Metallic', maps?.metallic, () => num('Metallic', 'metallic')),
+    tex('Height', maps?.height, () => num('Height', 'height', '0.5 = flat, above raises, below carves')),
+    slider('Variation', { value: draft.variation ?? 0, min: 0, max: 1, title: 'Procedural noise applied to color, roughness and height', onInput: (x) => (draft.variation = x || undefined) }),
+    maps ? slider('Tiling', { value: draft.tiling ?? 4, min: 0.25, max: 32, step: 0.25, onInput: (x) => ((draft.tiling = x), refresh()) }) : null,
+  );
+  const go = h('button', { class: 'btn primary' }, 'Save');
+  const close = openModal('Edit material', body, [go], () => window.clearTimeout(queued));
+  const save = () => {
+    draft.name = name.value.trim() || item.name;
+    app.library.updateMaterial(draft);
+    app.toast(`Saved "${draft.name}". Layers made from it keep their settings: press Update in a layer's panel to apply the change.`);
+    close();
+  };
+  go.addEventListener('click', save);
+  name.addEventListener('keydown', (e) => e.key === 'Enter' && save());
+  refresh();
+  name.focus();
+  name.select();
+}
+
 /** Deletes from the library as one undo step (Ctrl+Z, or Undo in the toast). */
 function deleteItems(app: App, items: LibraryItem[]): boolean {
   if (!items.length) return false;
@@ -147,6 +204,7 @@ export function itemMenu(app: App, item: LibraryItem, e: MouseEvent) {
   const run = (fn: () => void) => () => (close(), fn());
   const content = isOwn(item)
     ? [
+        isDecal(item) || isSmart(item) ? null : menuItem('Edit material…', run(() => editMaterialDialog(app, item)), 'Change its color, roughness, metallic and height'),
         menuItem('Rename / category…', run(() => renameDialog(app, item))),
         isDecal(item) ? null : menuItem('Duplicate', run(() => duplicateItem(app, item))),
         menuItem('Export (.mflib)…', run(() => exportItems(app, [item])), 'Save it as a file to share or back up'),

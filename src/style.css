@@ -740,6 +740,20 @@ input[type='range']::-moz-range-thumb {
 .tile:hover .tile-label {
   color: var(--text);
 }
+.mat-edit-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.mat-edit-head .field {
+  flex: 1;
+}
+.mat-edit-preview {
+  width: 72px;
+  height: 72px;
+  border-radius: 50%;
+  background: var(--panel-2);
+}
 .tile-add {
   position: absolute;
   top: 3px;

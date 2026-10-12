@@ -4,7 +4,7 @@ import { renderMaterialThumbnails } from '../engine/thumbnails';
 import { exportLibraryAction, importDecalsAction, importLibraryAction, importTextureSetAction, saveMaterialDialog, saveSmartMaterialDialog } from './actions';
 import { h, icon } from './dom';
 import { ICONS } from './icons';
-import { customMaterialThumb, decalUrl, itemMenu, libraryManagerDialog, menuItem, popupMenu, sortByGroup } from './libraryUI';
+import { customMaterialThumb, decalUrl, editMaterialDialog, itemMenu, libraryManagerDialog, menuItem, popupMenu, sortByGroup } from './libraryUI';
 import type { Decal } from '../engine/decals';
 
 type ShelfTab = 'materials' | 'smart' | 'masks' | 'decals';
@@ -196,7 +196,7 @@ export function mountShelf(app: App, root: HTMLElement) {
       builtinThumbs ??= renderMaterialThumbnails(app.renderer, app.viewport.scene.environment, MATERIALS.map((m) => m.values));
       const custom = app.library.materials.filter((m) => match(m.name) || match(m.group ?? '') || match('custom'));
       const builtin = MATERIALS.map((m, i) => ({ m, i })).filter(({ m }) => match(m.name) || match(m.category));
-      const add = tile('New material', h('div', { class: 'swatch add' }, icon(ICONS.plus)), () => app.newBlankMaterial(), [], 'Add a blank material to My materials');
+      const add = tile('New material', h('div', { class: 'swatch add' }, icon(ICONS.plus)), () => editMaterialDialog(app, app.newBlankMaterial()), [], 'Add a new material to My materials and edit it');
       grid.replaceChildren(
         ...(custom.length ? [] : [h('div', { class: 'shelf-group' }, 'My materials')]),
         ...grouped(custom, 'My materials', (m) => materialTile(m, customMaterialThumb(app, m))),
