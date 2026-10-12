@@ -633,9 +633,19 @@ input[type='range']::-moz-range-thumb {
   background: none;
   cursor: pointer;
 }
-.field.color .hex {
+.field.color input.hex {
+  flex: 0 1 auto;
+  width: 9ch;
+  min-width: 0;
+  padding: 2px 5px;
   font: 11px ui-monospace, Consolas, monospace;
   color: var(--text-dim);
+}
+.field.color input.hex:focus {
+  color: var(--text);
+}
+.field.color input.hex.invalid {
+  border-color: #d9534f;
 }
 .channels {
   display: flex;

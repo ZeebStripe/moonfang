@@ -90,14 +90,70 @@ export function hexToSrgb(hex: string): [number, number, number] {
   return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255];
 }
 
+/**
+ * Reads a typed colour: hex ("#FF8800", "ff8800", "#F80"), or three numbers ("255, 136, 0", "rgb(255 136 0)").
+ * Numbers are 0–255, unless all are at most 1 and one has a decimal point ("1, 0.53, 0"): then they are 0–1.
+ */
+export function parseColor(text: string): [number, number, number] | null {
+  const s = text.trim().toLowerCase();
+  const hex = /^#?([0-9a-f]{3}|[0-9a-f]{6})$/.exec(s);
+  if (hex) {
+    const d = hex[1].length === 3 ? [...hex[1]].map((c) => c + c).join('') : hex[1];
+    return hexToSrgb('#' + d);
+  }
+  const nums = s.replace(/^rgb\s*\(|\)$/g, '').split(/[\s,;/]+/).filter(Boolean);
+  if (nums.length !== 3 || !nums.every((n) => /^\d*\.?\d+$/.test(n))) return null;
+  const v = nums.map(Number);
+  const unit = v.every((x) => x <= 1) && nums.some((n) => n.includes('.'));
+  if (!unit && v.some((x) => x > 255)) return null;
+  return v.map((x) => (unit ? x : x / 255)) as [number, number, number];
+}
+
 export function colorField(label: string, value: [number, number, number], onInput: (c: [number, number, number]) => void): HTMLElement {
   const input = h('input', { type: 'color', value: srgbToHex(value) }) as HTMLInputElement;
-  const hex = h('span', { class: 'hex' }, srgbToHex(value).toUpperCase());
+  const text = h('input', {
+    type: 'text',
+    class: 'hex',
+    value: srgbToHex(value).toUpperCase(),
+    spellcheck: false,
+    title: 'Type a colour: hex (#FF8800) or RGB (255, 136, 0). Enter applies, Esc cancels.',
+  }) as HTMLInputElement;
+  const shown = () => input.value.toUpperCase();
   input.addEventListener('input', () => {
-    hex.textContent = input.value.toUpperCase();
+    text.value = shown();
+    text.classList.remove('invalid');
     onInput(hexToSrgb(input.value));
   });
-  return h('div', { class: 'field color' }, h('label', {}, label), input, hex);
+  const apply = () => {
+    const c = parseColor(text.value);
+    if (!c) return void text.classList.add('invalid');
+    text.classList.remove('invalid');
+    input.value = srgbToHex(c);
+    text.value = shown();
+    onInput(c);
+  };
+  const revert = () => {
+    text.value = shown();
+    text.classList.remove('invalid');
+  };
+  text.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') {
+      apply();
+      text.select();
+    } else if (e.key === 'Escape') {
+      revert();
+      text.blur();
+    }
+  });
+  text.addEventListener('input', () => text.classList.toggle('invalid', !parseColor(text.value)));
+  // Leaving the box applies a changed, valid colour and drops an unfinished one.
+  text.addEventListener('blur', () => {
+    if (text.value.trim().toUpperCase() === shown()) return;
+    if (parseColor(text.value)) apply();
+    else revert();
+  });
+  text.addEventListener('focus', () => text.select());
+  return h('div', { class: 'field color' }, h('label', {}, label), input, text);
 }
 
 export function section(title: string, ...children: (Child | Child[])[]): HTMLElement {
