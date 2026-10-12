@@ -91,11 +91,12 @@ select {
   margin-right: 12px;
 }
 .logo {
-  width: 18px;
-  height: 18px;
+  width: 22px;
+  height: 22px;
   border-radius: 50%;
-  background: radial-gradient(circle at 35% 30%, #ffb08a, var(--accent) 55%, #9c3216);
-  box-shadow: 0 0 0 2px rgba(232, 99, 58, 0.25);
+  background: url('./assets/logo.png') center / contain no-repeat;
+  /* a faint light ring: the logo's dark half would otherwise vanish into the dark top bar */
+  box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.28);
 }
 .menu-btn {
   background: none;
