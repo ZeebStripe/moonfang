@@ -196,9 +196,12 @@ export function mountShelf(app: App, root: HTMLElement) {
       builtinThumbs ??= renderMaterialThumbnails(app.renderer, app.viewport.scene.environment, MATERIALS.map((m) => m.values));
       const custom = app.library.materials.filter((m) => match(m.name) || match(m.group ?? '') || match('custom'));
       const builtin = MATERIALS.map((m, i) => ({ m, i })).filter(({ m }) => match(m.name) || match(m.category));
+      const add = tile('New material', h('div', { class: 'swatch add' }, icon(ICONS.plus)), () => app.newBlankMaterial(), [], 'Add a blank material to My materials');
       grid.replaceChildren(
+        ...(custom.length ? [] : [h('div', { class: 'shelf-group' }, 'My materials')]),
         ...grouped(custom, 'My materials', (m) => materialTile(m, customMaterialThumb(app, m))),
-        ...(custom.length ? [h('div', { class: 'shelf-group' }, 'Built-in')] : []),
+        add,
+        h('div', { class: 'shelf-group' }, 'Built-in'),
         ...builtin.map(({ m, i }) => materialTile(m, builtinThumbs![i])),
       );
     } else if (tab === 'smart') {

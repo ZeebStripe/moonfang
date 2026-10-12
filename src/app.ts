@@ -1021,6 +1021,23 @@ export class App {
     return res.material;
   }
 
+  /** Adds an empty material (default values, no maps) to the library: apply it as a layer, edit, then Update it. */
+  newBlankMaterial(): MaterialPreset {
+    const taken = new Set(this.library.materials.map((m) => m.name));
+    let n = 1;
+    while (taken.has(n === 1 ? 'New material' : `New material ${n}`)) n++;
+    const m: MaterialPreset = {
+      id: `user_${Date.now().toString(36)}`,
+      name: n === 1 ? 'New material' : `New material ${n}`,
+      category: 'Custom',
+      custom: true,
+      values: structuredClone(DEFAULT_VALUES),
+    };
+    this.library.addMaterial(m);
+    this.toast(`Added "${m.name}" to My materials. Use its small + to add it as a layer, change it, then press Update in the layer's panel.`);
+    return m;
+  }
+
   /** Stores a fill layer's material (values + maps) in the library. */
   saveFillAsMaterial(id: number, name?: string) {
     const l = this.findLayer(id);
