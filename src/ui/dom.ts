@@ -116,7 +116,7 @@ export function colorField(label: string, value: [number, number, number], onInp
     class: 'hex',
     value: srgbToHex(value).toUpperCase(),
     spellcheck: false,
-    title: 'Type a colour: hex (#FF8800) or RGB (255, 136, 0). Enter applies, Esc cancels.',
+    title: 'Type a color: hex (#FF8800) or RGB (255, 136, 0). Enter applies, Esc cancels.',
   }) as HTMLInputElement;
   const shown = () => input.value.toUpperCase();
   input.addEventListener('input', () => {
