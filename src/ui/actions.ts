@@ -2,6 +2,7 @@ import type { App } from '../app';
 import { assertArchiveSize } from '../engine/archive';
 import { downloadBlob, EXPORT_FORMATS, EXPORT_PRESETS, exportPrefixes, type ExportFormat } from '../engine/exporter';
 import { walkLayers } from '../engine/layers';
+import type { Decal } from '../engine/decals';
 import { loadDemoMesh, type DemoMeshId } from '../engine/meshLoader';
 import { checkbox, externalLink, h, openExternal, pickFile, pickFiles, pickFolder, selectField, slider } from './dom';
 import { emulateNumpad, setEmulateNumpad } from './input';
@@ -435,10 +436,10 @@ export async function importTextureSetAction(app: App, files?: File[]) {
 }
 
 /** Images → decal brushes (background removal, trimming and height are automatic). */
-export async function importDecalsAction(app: App, files?: File[]) {
+export async function importDecalsAction(app: App, files?: File[], useAsBrush = true): Promise<Decal[]> {
   files ??= await pickFiles(IMAGE_ACCEPT, true);
-  if (!files.length || busyWarning(app)) return;
-  await app.importDecals(await Promise.all(files.map(async (f) => ({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) }))));
+  if (!files.length || busyWarning(app)) return [];
+  return app.importDecals(await Promise.all(files.map(async (f) => ({ name: f.name, bytes: new Uint8Array(await f.arrayBuffer()) }))), useAsBrush);
 }
 
 export async function importLibraryAction(app: App, file?: File | null) {

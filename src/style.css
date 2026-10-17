@@ -1530,3 +1530,16 @@ body:has(.modal-backdrop) .toasts {
   padding: 2px 9px;
   font-size: 11.5px;
 }
+
+/* Skin Lab */
+.skinlab { display: flex; flex-direction: column; gap: 10px; min-width: 340px; }
+.skinlab-preview { height: 72px; border-radius: 8px; border: 1px solid var(--border, #333); }
+.skinlab-pane { display: flex; flex-direction: column; gap: 8px; }
+.skinlab-sub { font-weight: 600; margin-top: 4px; border-top: 1px solid var(--border, #333); padding-top: 8px; }
+.skinlab .dot { display: inline-block; width: 10px; height: 10px; border-radius: 50%; vertical-align: middle; flex: none; }
+.skinlab-grime { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border, #333); padding-top: 10px; }
+.skinlab-coat { display: flex; flex-direction: column; gap: 6px; padding: 8px; border: 1px solid var(--border, #333); border-radius: 8px; }
+.skinlab-coat .row { align-items: center; gap: 6px; }
+.skinlab-coat .coat-name { flex: 1; min-width: 0; }
+
+.placing-decal canvas { cursor: crosshair; }

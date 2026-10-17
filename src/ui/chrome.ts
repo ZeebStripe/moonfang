@@ -22,6 +22,7 @@ import {
 import { h, icon, iconButton, selectField } from './dom';
 import { ICONS } from './icons';
 import { savesDialog, saveVersionDialog } from './saves';
+import { skinLabDialog } from './skinlab';
 import { checkForUpdates } from './updates';
 import { reportBug } from './report';
 import { fromDropEntries, fromFiles, openModelFiles, zipKind } from './modelFiles';
@@ -108,6 +109,10 @@ export function mountTopbar(app: App, root: HTMLElement) {
     menu('Mesh', () => [
       { label: 'Bake Mesh Maps…', action: () => bakeDialog(app) },
       { label: 'Frame Model', action: () => app.viewport.frame(), shortcut: 'F' },
+    ]),
+    menu('Skin Lab', () => [
+      { label: 'Skin…', action: () => skinLabDialog(app, 'skin') },
+      { label: 'Eyes…', action: () => skinLabDialog(app, 'eyes') },
     ]),
     menu('Help', () => [
       { label: 'Shortcuts', action: () => shortcutsDialog(), shortcut: '?' },

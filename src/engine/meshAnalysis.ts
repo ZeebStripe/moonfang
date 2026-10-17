@@ -19,6 +19,63 @@ export interface Topology {
   /** welded vertex → incident faces (CSR) */
   vfStart: Int32Array;
   vfList: Int32Array;
+  /** the mesh's shading normal per non-indexed vertex (null without a normal attribute) */
+  sn: Float32Array | null;
+}
+
+/** Whether the shading normals of faces f and g agree at welded vertex v (smooth shading there). */
+function smoothAt(topo: Topology, f: number, g: number, v: number): boolean {
+  const { sn, weld } = topo;
+  if (!sn) return false;
+  let a = -1,
+    b = -1;
+  for (let k = 0; k < 3; k++) {
+    if (weld[f * 3 + k] === v) a = f * 3 + k;
+    if (weld[g * 3 + k] === v) b = g * 3 + k;
+  }
+  if (a < 0 || b < 0) return false;
+  return sn[a * 3] * sn[b * 3] + sn[a * 3 + 1] * sn[b * 3 + 1] + sn[a * 3 + 2] * sn[b * 3 + 2] > 0.9995;
+}
+
+/** Above this share of interior edges sharper than the angle yet shaded smooth, the mesh's shading decides. */
+const COARSE_SMOOTH_SHARE = 0.05;
+const shadingCache = new WeakMap<Topology, { angle: number; follows: boolean }>();
+
+/**
+ * Whether sharp edges should follow the mesh's shading instead of the angle alone. A coarse organic mesh (a game
+ * character) is shaded smooth across many edges sharper than any useful angle: as hard edges they would cover it in
+ * spikes, so there only edges with split normals are hard and the rest goes to the (graded) vertex curvature. A
+ * hard-surface mesh has few such edges (a smooth-shaded rim or base); it keeps the angle rule and its crisp edges.
+ */
+export function followsShading(topo: Topology, sharpAngle: number): boolean {
+  const hit = shadingCache.get(topo);
+  if (hit?.angle === sharpAngle) return hit.follows;
+  let follows = false;
+  if (topo.sn) {
+    const { weld, fn, vfStart, vfList } = topo;
+    const cosT = Math.cos(THREE.MathUtils.degToRad(sharpAngle));
+    let edges = 0,
+      smooth = 0;
+    for (let t = 0; t < topo.n / 3; t++) {
+      for (let k = 0; k < 3; k++) {
+        const a = weld[t * 3 + k],
+          b = weld[t * 3 + ((k + 1) % 3)];
+        // The face across edge a–b; each interior edge is counted once, from its lower-numbered face.
+        let f = -1;
+        for (let j = vfStart[a]; j < vfStart[a + 1] && f < 0; j++) {
+          const g = vfList[j];
+          if (g > t && (weld[g * 3] === b || weld[g * 3 + 1] === b || weld[g * 3 + 2] === b)) f = g;
+        }
+        if (f < 0) continue;
+        edges++;
+        const dot = fn[t * 3] * fn[f * 3] + fn[t * 3 + 1] * fn[f * 3 + 1] + fn[t * 3 + 2] * fn[f * 3 + 2];
+        if (dot < cosT && smoothAt(topo, t, f, a) && smoothAt(topo, t, f, b)) smooth++;
+      }
+    }
+    follows = smooth > COARSE_SMOOTH_SHARE * edges;
+  }
+  shadingCache.set(topo, { angle: sharpAngle, follows });
+  return follows;
 }
 
 export function buildTopology(g: THREE.BufferGeometry): Topology {
@@ -73,19 +130,35 @@ export function buildTopology(g: THREE.BufferGeometry): Topology {
   const fill = vfStart.slice(0, W);
   const vfList = new Int32Array(T * 3);
   for (let i = 0; i < T * 3; i++) vfList[fill[weld[i]]++] = Math.floor(i / 3);
-  return { n, weld, W, wp, fn, fa, vfStart, vfList };
+  const nrm = g.attributes.normal as THREE.BufferAttribute | undefined;
+  let sn: Float32Array | null = null;
+  if (nrm) {
+    sn = new Float32Array(n * 3);
+    for (let i = 0; i < n; i++) {
+      const x = nrm.getX(i),
+        y = nrm.getY(i),
+        z = nrm.getZ(i);
+      const l = Math.hypot(x, y, z) || 1;
+      sn[i * 3] = x / l;
+      sn[i * 3 + 1] = y / l;
+      sn[i * 3 + 2] = z / l;
+    }
+  }
+  return { n, weld, W, wp, fn, fa, vfStart, vfList, sn };
 }
 
 /**
  * Per-vertex dominant principal curvature (positive = convex), from normals that are smoothed only across edges
- * flatter than `sharpAngle` (like an "auto smooth" angle). Sharper edges are left to the sharp-edge map, so a
- * low-poly box's faces stay flat instead of inheriting the curvature of their corners.
+ * flatter than `sharpAngle` (like an "auto smooth" angle; see followsShading for coarse organic meshes). Sharper edges
+ * are left to the sharp-edge map, so a low-poly box's faces stay flat instead of inheriting the curvature of their
+ * corners, while a smooth-shaded character keeps its coarse creases in the (graded) curvature.
  * Each triangle edge gives κ = ((n_a − n_b) · (p_a − p_b)) / |p_a − p_b|².
  */
 export function autoSmoothCurvature(topo: Topology, sharpAngle: number): Float32Array {
   const { n, weld, W, wp, fn, fa, vfStart, vfList } = topo;
   const T = Math.floor(n / 3);
   const cosT = Math.cos(THREE.MathUtils.degToRad(sharpAngle));
+  const shading = followsShading(topo, sharpAngle);
   // Corner normals: area-weighted average of the incident faces within the smoothing angle of this face.
   const cn = new Float32Array(T * 9);
   for (let t = 0; t < T; t++) {
@@ -96,7 +169,7 @@ export function autoSmoothCurvature(topo: Topology, sharpAngle: number): Float32
         z = 0;
       for (let j = vfStart[v]; j < vfStart[v + 1]; j++) {
         const f = vfList[j];
-        if (fn[f * 3] * fn[t * 3] + fn[f * 3 + 1] * fn[t * 3 + 1] + fn[f * 3 + 2] * fn[t * 3 + 2] < cosT) continue;
+        if (fn[f * 3] * fn[t * 3] + fn[f * 3 + 1] * fn[t * 3 + 1] + fn[f * 3 + 2] * fn[t * 3 + 2] < cosT && !(shading && smoothAt(topo, t, f, v))) continue;
         x += fn[f * 3] * fa[f];
         y += fn[f * 3 + 1] * fa[f];
         z += fn[f * 3 + 2] * fa[f];
@@ -159,13 +232,40 @@ export function autoSmoothCurvature(topo: Topology, sharpAngle: number): Float32
 }
 
 /**
- * Edges whose faces meet at more than `sharpAngle`, split into convex and concave ones, as segment lists
- * (x0 y0 z0 x1 y1 z1 …). Open borders count as convex.
+ * |curvature| below which the fraction `p` of the surface area lies (log-spaced histogram, ~0.6 % resolution).
+ * `curv` is per non-indexed vertex, each weighted by a third of its triangle's area.
+ */
+export function curvaturePercentile(topo: Topology, curv: Float32Array, p: number): number {
+  const BINS = 4096,
+    LO = Math.log(1e-4),
+    HI = Math.log(1e6);
+  const hist = new Float64Array(BINS);
+  let total = 0;
+  for (let i = 0; i < curv.length; i++) {
+    const w = topo.fa[Math.floor(i / 3)];
+    const k = Math.abs(curv[i]);
+    const b = k > 1e-4 ? Math.min(BINS - 1, Math.floor(((Math.log(k) - LO) / (HI - LO)) * BINS)) : 0;
+    hist[b] += w;
+    total += w;
+  }
+  let acc = 0;
+  for (let b = 0; b < BINS; b++) {
+    acc += hist[b];
+    if (acc >= p * total) return Math.exp(LO + ((b + 1) / BINS) * (HI - LO));
+  }
+  return 0;
+}
+
+/**
+ * Edges whose faces meet at more than `sharpAngle` (and, on coarse smooth-shaded meshes, have split normals; see
+ * followsShading), split into convex and concave ones, as segment lists (x0 y0 z0 x1 y1 z1 …). Open borders count
+ * as convex.
  */
 export function sharpEdges(topo: Topology, sharpAngle: number): { convex: Float32Array; concave: Float32Array } {
   const { n, weld, W, wp, fn } = topo;
   const T = Math.floor(n / 3);
   const cosT = Math.cos(THREE.MathUtils.degToRad(sharpAngle));
+  const shading = followsShading(topo, sharpAngle);
   const faces = new Map<number, number[]>();
   for (let t = 0; t < T; t++) {
     for (let k = 0; k < 3; k++) {
@@ -191,7 +291,7 @@ export function sharpEdges(topo: Topology, sharpAngle: number): { convex: Float3
     if (fs.length !== 2) continue; // non-manifold: skip
     const [f0, f1] = fs;
     const dot = fn[f0 * 3] * fn[f1 * 3] + fn[f0 * 3 + 1] * fn[f1 * 3 + 1] + fn[f0 * 3 + 2] * fn[f1 * 3 + 2];
-    if (dot >= cosT) continue;
+    if (dot >= cosT || (shading && smoothAt(topo, f0, f1, a) && smoothAt(topo, f0, f1, b))) continue;
     // Convex when the second face's far corner lies below the first face's plane.
     let side = 0;
     for (let k = 0; k < 3; k++) {

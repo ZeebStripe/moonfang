@@ -1,5 +1,5 @@
 import type { App } from '../app';
-import { BLEND_MODES, GEN_LABELS, GEN_TYPES, MAP_KEYS, defaultGenerator, hasMaps, type ChannelKey, type FillLayer, type Layer, type MaterialMaps, type MaterialValues, type ChannelSet } from '../engine/layers';
+import { BLEND_MODES, EYE_GENERATORS, GEN_LABELS, GEN_TYPES, LOOK_AXES, MAP_KEYS, defaultGenerator, hasMaps, locateLayer, type ChannelKey, type GeneratorParams, type FillLayer, type Layer, type MaterialMaps, type MaterialValues, type ChannelSet } from '../engine/layers';
 import type { TextureStore } from '../engine/library';
 import { displaySettings, importDecalsAction, saveMaterialDialog, saveSmartMaterialDialog } from './actions';
 import { decalUrl } from './libraryUI';
@@ -8,6 +8,7 @@ import { ICONS } from './icons';
 import { brushTipControls, stencilControls } from './brushUI';
 import { FACE_MODES } from '../engine/faceSelect';
 import { MATERIALS, SMART_MATERIALS } from '../data/materials';
+import { shiftProjection, slideProjection, turnProjection } from '../engine/decalProjection';
 
 const CHANNEL_LABELS: Record<ChannelKey, string> = {
   color: 'Base Color',
@@ -85,6 +86,7 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
   const tabs = h('div', { class: 'tabs' });
   const body = h('div', { class: 'panel-body' });
   let tab: 'props' | 'scene' = 'props';
+  let moveWholeEye = true;  // eye offset sliders move all of an eye's layers together
   root.append(tabs, body);
 
   function brushSection(): HTMLElement {
@@ -231,17 +233,39 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
           ),
         )
       : null;
+    const projected = d.placement !== 'stamp' && !maskMode;
     return section(
       `Decal${maskMode ? ' · into mask' : ''}`,
       decals.length
         ? [picker, manage]
         : h('div', { class: 'empty-decals' }, h('div', { class: 'dim small' }, 'No decals yet. Import images (logos, stickers, signs, bullet holes…): plain backgrounds are removed and a height map is made automatically.'), picker),
-      h('div', { class: 'dim small' }, 'Click the model to place it; drag before releasing to size and rotate it (Shift snaps). Mirror symmetry applies.'),
+      maskMode
+        ? null
+        : selectField(
+            'Placement',
+            [['stamp', 'Paint into the layer'], ['wrap', 'Wrap around (own layer)'], ['flat', 'Project flat (own layer)']] as const,
+            d.placement,
+            (v) => ((d.placement = v), render()),
+          ),
+      h(
+        'div',
+        { class: 'dim small' },
+        projected
+          ? d.placement === 'wrap'
+            ? 'Click a limb, the neck or the torso: the decal fits itself to it and bends around it, on a layer of its own that can be moved, turned and resized later. Drag before releasing to size and rotate it. Good for tattoos and bands.'
+            : 'Click the model: the decal is projected along the surface there, on a layer of its own that can be moved, rotated and resized later. Drag before releasing to size and rotate it.'
+          : 'Click the model to place it; drag before releasing to size and rotate it (Shift snaps). Mirror symmetry applies.',
+      ),
       slider('Default size', { value: b.size, min: 4, max: 400, step: 1, onInput: (v) => ((b.size = v), app.emit('tool')), title: 'Size when you click without dragging' }),
       slider('Default angle', { value: b.angle, min: -180, max: 180, step: 1, onInput: (v) => (b.angle = v), title: 'Rotation when you click without dragging' }),
       slider('Opacity', { value: b.opacity, min: 0, max: 1, onInput: (v) => (b.opacity = v) }),
       maskMode
         ? h('div', { class: 'dim small' }, 'Painting the layer mask: the decal’s shape is stamped with the mask value.')
+        : projected
+        ? [
+            checkbox('One ink colour (tattoos)', d.ink, (v) => ((d.ink = v), render()), 'Paint the decal’s dark lines in one colour; light areas inside it stay as they are'),
+            d.ink ? colorField('Ink', d.inkColor, (c) => (d.inkColor = c)) : null,
+          ]
         : [
             h(
               'div',
@@ -256,6 +280,48 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
             d.channels.metallic ? slider('Metallic', { value: b.values.metallic, min: 0, max: 1, onInput: (v) => (b.values.metallic = v) }) : null,
           ],
     );
+  }
+
+  /**
+   * Placement of a projected decal layer. Slide and turn are offsets from where the decal was when the panel was drawn, so
+   * they read 0 again after every re-render.
+   */
+  function projectionControls(l: FillLayer): HTMLElement[] {
+    const t = l.projection!;
+    const changed = () => app.layerChanged();
+    const commit = () => app.layerChanged(true);
+    const base = { ...t };
+    const wrap = t.mapping === 'wrap';
+    // The new spot is only fitted when the user clicks, so a changed placement mode waits for that click too.
+    const replace = (mapping = t.mapping) =>
+      app.startProjectionPlacement({ image: t.image, name: l.name, mapping, size: t.size, ink: [...l.values.color], useImageColor: t.useImageColor, opacity: l.opacity, layerId: l.id });
+    return [
+      h('div', { class: 'subhead' }, 'Projected decal'),
+      selectField('Placement', [['wrap', 'Wrap around'], ['flat', 'Flat']] as const, t.mapping, (v) => replace(v)),
+      slider(wrap ? 'Slide along the limb' : 'Move up ↔ down', { value: 0, min: -0.3, max: 0.3, step: 0.001, onInput: (v) => ((t.center = slideProjection(base, v)), changed()), onCommit: commit }),
+      wrap
+        ? slider('Turn around the limb (°)', { value: 0, min: -180, max: 180, step: 1, onInput: (v) => ((t.front = turnProjection(base, v)), changed()), onCommit: commit })
+        : slider('Move left ↔ right', { value: 0, min: -0.3, max: 0.3, step: 0.001, onInput: (v) => ((t.center = shiftProjection(base, v)), changed()), onCommit: commit }),
+      slider('Rotate (°)', { value: t.rotation, min: -180, max: 180, step: 1, onInput: (v) => ((t.rotation = v), changed()), onCommit: commit }),
+      slider('Size', { value: t.size, min: 0.01, max: 0.5, step: 0.001, onInput: (v) => ((t.size = v), changed()), onCommit: commit, title: 'Height of the decal, as a share of the model’s longest side' }),
+      slider('Width', { value: t.aspect, min: 0.25, max: 4, step: 0.01, onInput: (v) => ((t.aspect = v), changed()), onCommit: commit, title: 'Width ÷ height' }),
+      slider('Reach', {
+        value: t.reach,
+        min: 0.002,
+        max: 0.3,
+        step: 0.001,
+        onInput: (v) => ((t.reach = v), changed()),
+        onCommit: commit,
+        title: 'How far from the placed surface it projects: lower it if the decal spills onto a nearby part (the other arm, the torso)',
+      }),
+      h(
+        'div',
+        { class: 'row wrap' },
+        checkbox('Mirror', t.flip, (v) => ((t.flip = v), commit())),
+        checkbox('Use the decal’s colours', t.useImageColor, (v) => ((t.useImageColor = v), commit(), render())),
+        h('button', { class: 'btn small', 'data-testid': 'decal-replace', title: 'Click the model to move the decal there', onclick: () => replace() }, 'Place again'),
+      ),
+    ];
   }
 
   function channelToggles(c: ChannelSet) {
@@ -281,8 +347,9 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
       selectField('Blend (height/normal)', [['add', 'Add (relative)'], ['normal', 'Replace']] as const, l.heightBlend, (v) => ((l.heightBlend = v), commit())),
     ];
     if (l.kind === 'fill') {
+      if (l.projection) parts.push(...projectionControls(l));
       parts.push(
-        h('div', { class: 'subhead' }, 'Fill material'),
+        h('div', { class: 'subhead' }, l.projection ? 'Ink colour (when not using the decal’s colours)' : 'Fill material'),
         channelEditor(
           l.values,
           l.channels,
@@ -485,10 +552,18 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
         slider('Amount', { value: g.amount, min: 0, max: 1, onInput: (v) => ((g.amount = v), changed()) }),
         slider('Contrast', { value: g.contrast, min: 0, max: 1, onInput: (v) => ((g.contrast = v), changed()) }),
         g.type !== 'noise' ? slider('Noise breakup', { value: g.noiseAmount, min: 0, max: 1, onInput: (v) => ((g.noiseAmount = v), changed()) }) : null,
-        slider('Noise scale', { value: g.noiseScale, min: 0.5, max: 60, step: 0.5, onInput: (v) => ((g.noiseScale = v), changed()) }),
+        // Pores and freckles are tiny cells, so they need far finer scales than the other generators (defaults 320 / 160).
+        slider('Noise scale', { value: g.noiseScale, min: 0.5, max: g.type === 'pores' || g.type === 'freckles' ? 500 : 60, step: 0.5, onInput: (v) => ((g.noiseScale = v), changed()) }),
         g.type === 'gradient'
-          ? selectField('Axis', [[0, 'X'], [1, 'Y'], [2, 'Z']] as const, g.axis, (v) => ((g.axis = v), changed()))
+          ? selectField('Axis', [[0, 'X'], [1, 'Y'], [2, 'Z']] as const, (g.axis % 3) as 0 | 1 | 2, (v) => ((g.axis = v), changed()))
           : null,
+        EYE_GENERATORS.includes(g.type)
+          ? selectField('Mapping', [['sphere', 'Sphere (any UVs)'], ['uv', 'UV disc']] as const, g.mapping ?? 'uv', (v) => ((g.mapping = v), changed(), render()))
+          : null,
+        EYE_GENERATORS.includes(g.type) && g.mapping === 'sphere'
+          ? selectField('Looks toward', LOOK_AXES, g.axis, (v) => ((g.axis = v), changed()))
+          : null,
+        ...(EYE_GENERATORS.includes(g.type) ? eyeOffsetFields(l, g, changed) : []),
         h(
           'div',
           { class: 'row' },
@@ -499,6 +574,36 @@ export function mountPropsPanel(app: App, root: HTMLElement) {
       );
     }
     return section('Mask', ...parts);
+  }
+
+  /**
+   * Moves an eye generator's centre. With "Move whole eye" every eye-generator layer beside this one (an eye smart
+   * material's folder) shifts by the same amount, so iris, ring, veins and pupil stay lined up.
+   */
+  function eyeOffsetFields(l: Layer, g: GeneratorParams, changed: () => void): HTMLElement[] {
+    const shift = (axis: 0 | 1, v: number) => {
+      const d = v - (g.offset?.[axis] ?? 0);
+      const list = moveWholeEye ? locateLayer(app.layers, l.id)?.list ?? [l] : [l];
+      for (const o of list) {
+        const og = o.mask?.generator;
+        if (!og || (o !== l && !EYE_GENERATORS.includes(og.type))) continue;
+        const off: [number, number] = [...(og.offset ?? [0, 0])];
+        off[axis] = Math.min(0.5, Math.max(-0.5, off[axis] + d));
+        og.offset = off;  // a new array: smart material layers start out sharing one
+      }
+      changed();
+    };
+    const unit = g.mapping === 'sphere' ? ' (±0.5 = 60°)' : ' (UV)';
+    return [
+      slider(`Centre left ↔ right${unit}`, { value: g.offset?.[0] ?? 0, min: -0.5, max: 0.5, onInput: (v) => shift(0, v) }),
+      slider(`Centre down ↔ up${unit}`, { value: g.offset?.[1] ?? 0, min: -0.5, max: 0.5, onInput: (v) => shift(1, v) }),
+      h(
+        'div',
+        { class: 'row' },
+        checkbox('Move whole eye', moveWholeEye, (v) => (moveWholeEye = v)),
+        h('button', { class: 'btn small', title: 'Put this layer back on the eye’s look axis', onclick: () => (shift(0, 0), shift(1, 0), render()) }, 'Recentre'),
+      ),
+    ];
   }
 
   function render() {

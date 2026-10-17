@@ -40,7 +40,8 @@ The app isn't among the repository's files above; it is only on the Releases pag
   masked to exactly those faces. You can also show or hide the selected layer on them, or fill them with the brush.
   It works in the 2D UV view too.
 - **Masks**: painted masks (black/white/grey) that multiply with procedural **generators**:
-  - Edge Wear, Dirt/Cavity, Top-Facing (dust), Position Gradient, Noise, Ambient Occlusion, Curvature
+  - Edge Wear, Dirt/Cavity, Top-Facing (dust), Position Gradient, Noise, Ambient Occlusion, Curvature, Hatching
+  - for skin and eyes: Skin Pores, Freckles, Blush, and Eye Iris / Pupil / Limbal Ring / Veins
   - each generator has amount, contrast, noise breakup, scale, invert and seed controls
 - **Mesh map baking** from the low-poly mesh, done on the GPU:
   - ambient occlusion, using 32–512 hemispherical shadow-map samples and a max distance
@@ -76,6 +77,19 @@ The app isn't among the repository's files above; it is only on the Releases pag
   Click the model to place a decal; drag before releasing to size and rotate it (Shift snaps to 15°). It paints its
   colours, its relief (adjustable depth) and optionally roughness / metallic, works with mirror symmetry, and can be
   stamped into a layer mask. Decals live in your library and export / import with it.
+  **Placement** chooses how it lands:
+  - **Paint into the layer** stamps it into the selected layer, as above.
+  - **Wrap around** fits itself to the limb, neck or torso you click and bends the decal around it.
+  - **Project flat** lays it straight onto the surface.
+
+  Wrapped and flat decals sit on a layer of their own, so you can move, turn, rotate, resize or place them again at
+  any time from the layer's properties. **One ink colour** turns a design's dark lines into ink, for tattoos.
+- **Skin Lab** (top menu): builds skin and eyes from a few plain controls, added as a folder of ordinary fill layers
+  that work on any UVs.
+  - **Skin**: tone, undertone, blush, freckles, oiliness, optional pores, and stackable **grime coats** (dirt, mud,
+    motor oil, soot, dust, blood) with their own colour, amount, smoothness and pattern.
+  - **Eyes**: iris colour, iris and pupil size, fibres, limbal ring and bloodshot veins. Sphere mapping keeps the iris
+    round on every eyeball whatever its UVs, and gaze and pupil sliders move it.
 - **Smart masks**: one-click generator presets.
 - **Viewport**:
   - PBR preview with image-based lighting (built-in studio or your own `.hdr`)
@@ -240,11 +254,22 @@ All painting and compositing runs on the GPU in **texture space**.
 - **Export** (`src/engine/exporter.ts`): Channels are re-packed per preset on the GPU and encoded with a small built-in
   PNG encoder, because canvas encoding premultiplies alpha and would destroy data stored in alpha channels. UV
   orientation and normal-map green conventions are corrected per source format.
+- **UV seams** (`src/engine/seams.ts`): Edges where the UVs split are found once per mesh, and a strip outside each
+  island records where the surface continues on the other side. Normals from height and padding read across the seam
+  instead of repeating the island's own edge.
+
+More detail (architecture, the Skin Lab, projected decals, testing and the roadmap) is in
+[docs/DESIGN.md](docs/DESIGN.md).
+
+### Tests
+
+`npm test` runs the unit tests (Node 24) and `npm run test:e2e` the browser tests (Playwright). To run those against
+an installed Edge instead of Playwright's Chromium, set `PW_CHANNEL=msedge`.
 
 ## Limitations / roadmap
 
 - High-poly baking projects every texture set against the whole high poly (no matching by mesh name yet), and the cage
-  is a uniform distance rather than an editable cage mesh. Normals use a per-triangle UV tangent frame, not MikkTSpace,
+  is a uniform distance rather than an editable cage mesh. Adjustable cages are planned (see the design doc). Normals use a per-triangle UV tangent frame, not MikkTSpace,
   so other engines may show slight shading differences on the low poly's smoothing.
 - Missing so far: an anchor/filter system, and emissive/opacity texture maps in imported materials (both channels can
   be painted and filled, but texture-set import only reads color/roughness/metallic/height/normal).

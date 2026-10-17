@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { createRT, FullscreenPass, GLSL_MAPS, GLSL_NOISE, rawMaterial } from './gl';
 import { mapUniforms, setMapUniforms, type TextureStore } from './library';
 import { BLEND_MODES, GEN_TYPES, HEIGHT_BLENDS, type Layer } from './layers';
-import type { MeshMaps } from './meshMaps';
+import { GLSL_REMAP, type MeshMaps } from './meshMaps';
 
 /** GLSL for mask generators (edge wear, dirt, gradients, …) shared by the layer pass and the mask preview. */
 const GLSL_MASK = /* glsl */ `
@@ -10,14 +10,82 @@ uniform int uMaskMode;          // 0 = no mask, 1 = painted mask, 2 = painted * 
 uniform sampler2D uMaskTex;
 uniform int uGenType;
 uniform vec4 uGen;              // amount, contrast, noiseScale, noiseAmount
-uniform vec4 uGen2;             // invert, axis, seed, -
+uniform vec4 uGen2;             // invert, axis, seed, sphere mapping (eye generators)
+uniform vec2 uGenOffset;        // eye generators: centre offset
 uniform sampler2D uMeshA;       // posN.xyz, ao
 uniform sampler2D uMeshB;       // worldNormal.xyz, curvature
 uniform vec3 uExtentRatio;
 
-float generator(vec3 posN, vec3 pos, vec3 wn, float curv, float ao) {
+// Cellular (Worley) noise: distance to the nearest of one jittered feature point per cell.
+float worley(vec3 p) {
+  vec3 i = floor(p), f = fract(p);
+  float d = 2.0;
+  for (int z = -1; z <= 1; z++)
+    for (int y = -1; y <= 1; y++)
+      for (int x = -1; x <= 1; x++) {
+        vec3 g = vec3(float(x), float(y), float(z));
+        vec3 o = vec3(hash31(i + g), hash31(i + g + 19.3), hash31(i + g + 47.1));
+        d = min(d, length(g + o - f));
+      }
+  return d;
+}
+
+// Eye generators measure a radius r and a direction around the gaze axis. Sphere mapping (uGen2.w = 1) takes the
+// angle between the surface normal and the look axis (uGen2.y: 0-2 = +X/+Y/+Z, 3-5 = -X/-Y/-Z). On a round eyeball
+// the normal points away from its own centre, so the iris is a round cap on every eyeball in the set, wherever it
+// sits and however its UVs are laid out (r = 0.5 at 60 degrees). UV mapping expects a texture laid out as a centred
+// disc (the iris at the middle of the 0-1 square). uGenOffset moves the centre (x right, y up, seen looking at the
+// eye): a rotation of the gaze with sphere mapping (0.5 = 60 degrees), a shift in UV units with UV mapping.
+float eyeGenerator(vec2 uv, vec3 wn, float n) {
   float amount = uGen.x, contrast = uGen.y, nScale = uGen.z, nAmt = uGen.w;
-  float n = fbm(pos * nScale + uGen2.z * 13.17);
+  float r = 0.0;
+  vec2 dir = vec2(1.0, 0.0);
+  if (uGen2.w > 0.5) {
+    // Look axis L with the screen right R and up U of a camera looking back at the eye along it.
+    int ax = int(uGen2.y + 0.5);
+    vec3 L = vec3(0.0, 0.0, 1.0), R = vec3(1.0, 0.0, 0.0), U = vec3(0.0, 1.0, 0.0);
+    if (ax == 0) { L = vec3(1.0, 0.0, 0.0); R = vec3(0.0, 0.0, -1.0); }
+    else if (ax == 1) { L = vec3(0.0, 1.0, 0.0); U = vec3(0.0, 0.0, -1.0); }
+    else if (ax == 3) { L = vec3(-1.0, 0.0, 0.0); R = vec3(0.0, 0.0, 1.0); }
+    else if (ax == 4) { L = vec3(0.0, -1.0, 0.0); U = vec3(0.0, 0.0, 1.0); }
+    else if (ax == 5) { L = vec3(0.0, 0.0, -1.0); R = vec3(-1.0, 0.0, 0.0); }
+    vec3 v = vec3(dot(wn, R), dot(wn, U), dot(wn, L));
+    // Undo the gaze rotation (yaw towards R, then pitch towards U) so the moved centre lands on +z.
+    vec2 a = uGenOffset * (3.14159265 / 1.5);
+    v = vec3(v.x * cos(a.x) - v.z * sin(a.x), v.y, v.x * sin(a.x) + v.z * cos(a.x));
+    v = vec3(v.x, v.y * cos(a.y) - v.z * sin(a.y), v.y * sin(a.y) + v.z * cos(a.y));
+    float len = length(v);
+    r = len > 1e-5 ? acos(clamp(v.z / len, -1.0, 1.0)) * (1.5 / 3.14159265) : 0.0;
+    float lp = length(v.xy);
+    dir = lp > 1e-5 ? v.xy / lp : vec2(1.0, 0.0);
+  } else {
+    vec2 q = uv - 0.5 - uGenOffset;
+    r = length(q);
+    dir = r > 1e-5 ? q / r : vec2(1.0, 0.0);
+  }
+  float soft = mix(0.06, 0.003, contrast);
+  // Radial streaks: noise that varies with the angle (through the direction vector) but barely with the radius.
+  float seed = uGen2.z * 13.17;
+  float v = 0.0;
+  if (uGenType == 12) {
+    float fib = fbm(vec3(dir * nScale * 0.12, r * 14.0 + seed));
+    float disc = 1.0 - smoothstep(amount - soft, amount, r + (n - 0.5) * 0.01);
+    v = disc * mix(1.0, clamp(fib * 1.6 - 0.2, 0.0, 1.0), nAmt);
+  } else if (uGenType == 13) {
+    v = 1.0 - smoothstep(amount - soft, amount + soft, r);
+  } else if (uGenType == 14) {
+    float edge = amount + (n - 0.5) * nAmt * 0.03;
+    v = smoothstep(edge * 0.82, edge, r) * (1.0 - smoothstep(edge, edge + soft, r));
+  } else {
+    float ridge = pow(1.0 - abs(2.0 * fbm(vec3(dir * nScale * 0.15, r * 6.0 + seed)) - 1.0), 7.0);
+    float outside = smoothstep(0.28, 0.4, r) * (1.0 - smoothstep(0.6, 0.85, r));  // fade out past the eye's equator
+    v = clamp(ridge * (0.3 + amount * 2.5) * outside * mix(1.0, n * 1.6, nAmt * 0.5), 0.0, 1.0);
+  }
+  return uGen2.x > 0.5 ? 1.0 - v : v;
+}
+
+float surfaceGenerator(vec3 posN, vec3 pos, vec3 wn, float curv, float ao, float n) {
+  float amount = uGen.x, contrast = uGen.y, nScale = uGen.z, nAmt = uGen.w;
   float s = 0.0;
   if (uGenType == 1) s = clamp((curv - 0.5) * 2.0, 0.0, 1.0);
   else if (uGenType == 2) s = clamp((1.0 - ao) * 1.3 + clamp((0.5 - curv) * 2.5, 0.0, 1.0), 0.0, 1.0);
@@ -35,11 +103,25 @@ float generator(vec3 posN, vec3 pos, vec3 wn, float curv, float ao) {
     s = shade * 0.6 + (0.5 - stripe) * 0.9;
     n = fbm(pos * 6.0 + uGen2.z * 13.17);  // breakup at a coarser scale than the line density
   }
+  else if (uGenType == 9) s = pow(1.0 - worley(pos * nScale + uGen2.z * 7.31), 3.0) * mix(0.55, 1.0, smoothstep(0.25, 0.7, fbm(pos * 4.0 + uGen2.z * 3.7)));  // pores: small pits at cell centres, denser in some areas
+  else if (uGenType == 10) s = (1.0 - worley(pos * nScale + uGen2.z * 7.31)) * smoothstep(0.3, 0.75, fbm(pos * 3.0 + uGen2.z * 5.1));  // freckles: speckles inside clusters
+  // blush: soft blotches that favour clearly convex areas (cheeks, nose, knuckles). Mild convexity alone is not enough,
+  // because on a body nearly everything is a little convex and the blush would cover all but the creases.
+  else if (uGenType == 11) s = smoothstep(0.55, 0.85, curv) * 0.55 + n * 0.45;
   if (uGenType != 4) s += (n - 0.5) * nAmt;
   float t = 1.0 - amount;
   float w = mix(1.0, 0.02, contrast);
   float v = smoothstep(t - w * 0.5, t + w * 0.5, s);
   return uGen2.x > 0.5 ? 1.0 - v : v;
+}
+
+// No early return: ANGLE's HLSL translation warns about one (X4000, "potentially uninitialized").
+float generator(vec2 uv, vec3 posN, vec3 pos, vec3 wn, float curv, float ao) {
+  float n = fbm(pos * uGen.z + uGen2.z * 13.17);
+  float v = 0.0;
+  if (uGenType >= 12) v = eyeGenerator(uv, wn, n);
+  else v = surfaceGenerator(posN, pos, wn, curv, ao, n);
+  return v;
 }
 
 float computeMask(vec2 uv) {
@@ -48,7 +130,7 @@ float computeMask(vec2 uv) {
   if (uMaskMode == 2) {
     vec4 a = texture(uMeshA, uv);
     vec4 b = texture(uMeshB, uv);
-    m *= generator(a.xyz, a.xyz * uExtentRatio, normalize(b.xyz * 2.0 - 1.0), b.w, a.w);
+    m *= generator(uv, a.xyz, a.xyz * uExtentRatio, normalize(b.xyz * 2.0 - 1.0), b.w, a.w);
   }
   return m;
 }
@@ -78,9 +160,47 @@ uniform vec3 uVariation;   // amount, scale, seed
 uniform float uOpacity;
 uniform int uBlend;
 uniform int uHeightBlend;  // 0 = add, 1 = normal
+uniform int uProjOn;        // fill layer projects a decal image (see decalProjection.ts, which mirrors this maths)
+uniform sampler2D uProj;    // RGB ink colour (sRGB), A = coverage; top row first
+uniform vec3 uProjC;        // centre
+uniform vec3 uProjA;        // axis
+uniform vec3 uProjF;        // front
+uniform vec4 uProjP;        // radius, size, aspect, reach
+uniform vec4 uProjP2;       // rotation (radians), flip, use image colour, wrap (1) / flat (0)
 ${GLSL_NOISE}
 ${GLSL_MASK}
 ${GLSL_MAPS}
+
+// Wrap: the image is bent around the axis (x = arc length round from the front, y = height along the axis), on
+// surfaces facing out from the axis within reach of the placed radius. Flat: projected along the axis.
+vec4 projectionSample(vec3 p, vec3 n) {
+  vec3 d = p - uProjC;
+  float x, y, w;
+  if (uProjP2.w > 0.5) {
+    float h = dot(d, uProjA);
+    vec3 q = d - uProjA * h;
+    float dist = length(q);
+    float ang = atan(dot(q, cross(uProjA, uProjF)), dot(q, uProjF));
+    x = ang * dist;
+    y = h;
+    float outward = dist > 1e-6 ? dot(n, q / dist) : 0.0;
+    w = smoothstep(0.0, 0.25, outward) * (1.0 - smoothstep(uProjP.w * 0.7, uProjP.w, abs(dist - uProjP.x)));
+  } else {
+    x = dot(d, cross(uProjF, uProjA));
+    y = dot(d, uProjF);
+    w = smoothstep(0.0, 0.25, dot(n, uProjA)) * (1.0 - smoothstep(uProjP.w * 0.7, uProjP.w, abs(dot(d, uProjA))));
+  }
+  float c = cos(uProjP2.x), s = sin(uProjP2.x);
+  vec2 r = vec2(c * x + s * y, -s * x + c * y);
+  vec2 uv = vec2((uProjP2.y > 0.5 ? -r.x : r.x) / (uProjP.y * uProjP.z), r.y / uProjP.y) + 0.5;
+  if (w <= 0.0 || any(lessThan(uv, vec2(0.0))) || any(greaterThan(uv, vec2(1.0)))) return vec4(0.0);
+  // Level 0: the pass runs in UV space, where screen derivatives jump at every UV seam.
+  vec4 t = textureLod(uProj, vec2(uv.x, 1.0 - uv.y), 0.0);
+  // In one ink colour the decal's dark lines are the ink: light areas inside it (paper left between the lines,
+  // which background removal only clears when it touches the border) stay skin.
+  float ink = uProjP2.z > 0.5 ? 1.0 : 1.0 - dot(t.rgb, vec3(0.2126, 0.7152, 0.0722));
+  return vec4(t.rgb, t.a * ink * w);
+}
 
 vec3 blendColor(vec3 a, vec3 b, int mode) {
   if (mode == 1) return a * b;
@@ -126,6 +246,11 @@ void main() {
     r = clamp(r + n * 0.7, 0.0, 1.0);
     h = clamp(h + n * 0.6, 0.0, 1.0);
     colA = uFillEnable.x; rA = uFillEnable.y; mtA = uFillEnable.z; hA = uFillEnable.w;
+    if (uProjOn == 1) {
+      vec4 t = projectionSample(pos, wn);
+      if (uProjP2.z > 0.5) col = t.rgb;
+      m *= t.a;
+    }
   }
 #endif
 
@@ -181,7 +306,10 @@ layout(location = 2) out vec4 o2;
 void main() { o0 = vec4(0.5, 0.5, 0.5, 0.0); o1 = vec4(0.5, 0.0, 0.5, 0.0); o2 = vec4(0.0, 0.0, 0.0, 1.0); }
 `;
 
-/** Final pass: sRGB→linear base color, ORM packing, height→normal, and UV padding through the jump-flood seeds. */
+/**
+ * Final pass: sRGB→linear base color, ORM packing, height→normal, and UV padding. Padding next to a UV seam holds the
+ * surface continued across the seam, so the height → normal differences and texture filtering stay continuous there.
+ */
 const FINAL_FRAG = /* glsl */ `
 in vec2 vUv;
 layout(location = 0) out vec4 o0;  // linear base color
@@ -195,16 +323,14 @@ uniform sampler2D uMeshA;
 uniform sampler2D uMeshD;   // baked high-poly normal (flat without one)
 uniform sampler2D uCov;
 uniform sampler2D uSeeds;
+uniform sampler2D uTwin;
+uniform vec2 uTwinXf;
 uniform vec2 uTexel;
 uniform float uNormalK;
 uniform float uAoStrength;
 ${GLSL_NOISE}
-vec2 remap(vec2 uv) {
-  if (texture(uCov, uv).r > 0.5) return uv;
-  vec4 s = texture(uSeeds, uv);
-  return s.x < 0.0 ? uv : s.xy;
-}
-float hAt(vec2 uv) { return texture(uAcc1, remap(clamp(uv, 0.0, 1.0))).b; }
+${GLSL_REMAP}
+float hAt(vec2 uv) { return texture(uAcc1, remap(uv)).b; }
 void main() {
   vec2 u = remap(vUv);
   vec3 col = texture(uAcc0, u).rgb;
@@ -273,6 +399,13 @@ export class Compositor {
     uOpacity: { value: 1 },
     uBlend: { value: 0 },
     uHeightBlend: { value: 0 },
+    uProjOn: { value: 0 },
+    uProj: { value: null },
+    uProjC: { value: new THREE.Vector3() },
+    uProjA: { value: new THREE.Vector3(0, 1, 0) },
+    uProjF: { value: new THREE.Vector3(0, 0, 1) },
+    uProjP: { value: new THREE.Vector4(0, 1, 1, 1) },
+    uProjP2: { value: new THREE.Vector4() },
     ...maskUniforms(),
     ...mapUniforms(),
   };
@@ -287,17 +420,21 @@ export class Compositor {
     uMeshD: { value: null },
     uCov: { value: null },
     uSeeds: { value: null },
+    uTwin: { value: null },
+    uTwinXf: { value: new THREE.Vector2(1, 0) },
     uTexel: { value: new THREE.Vector2() },
     uNormalK: { value: 0.02 },
     uAoStrength: { value: 1 },
   });
   private dummy = new THREE.DataTexture(new Uint8Array([255, 255, 255, 255]), 1, 1);
+  private clear = new THREE.DataTexture(new Uint8Array([0, 0, 0, 0]), 1, 1);
 
   constructor(
     private renderer: THREE.WebGLRenderer,
     private fs: FullscreenPass,
   ) {
     this.dummy.needsUpdate = true;
+    this.clear.needsUpdate = true;
   }
 
   resize(size: number) {
@@ -321,6 +458,8 @@ export class Compositor {
     f.uMeshD.value = maps.meshDTex;
     f.uCov.value = maps.coverage.texture;
     f.uSeeds.value = maps.seeds.texture;
+    f.uTwin.value = maps.twin.texture;
+    f.uTwinXf.value.copy(maps.twinXf);
     f.uTexel.value.set(1 / this.size, 1 / this.size);
     f.uNormalK.value = 0.02 * settings.normalStrength;
     f.uAoStrength.value = settings.aoStrength;
@@ -390,6 +529,18 @@ export class Compositor {
       u.uVariation.value.set(layer.variation, layer.variationScale, layer.seed);
       setMapUniforms(u, layer.maps, layer.tiling, store, this.size);
       u.uMeshC.value = maps.meshCTex;
+      const t = layer.projection;
+      const img = t ? store.get(t.image) : null;
+      // A projected decal whose image hasn't loaded (or was deleted) shows nothing rather than a solid fill.
+      u.uProjOn.value = t ? 1 : 0;
+      u.uProj.value = img ?? this.clear;
+      if (t) {
+        u.uProjC.value.fromArray(t.center);
+        u.uProjA.value.fromArray(t.axis);
+        u.uProjF.value.fromArray(t.front);
+        u.uProjP.value.set(t.radius, Math.max(t.size, 1e-4), Math.max(t.aspect, 1e-3), Math.max(t.reach, 1e-4));
+        u.uProjP2.value.set(THREE.MathUtils.degToRad(t.rotation), t.flip ? 1 : 0, t.useImageColor ? 1 : 0, t.mapping === 'wrap' ? 1 : 0);
+      }
     }
     this.setMaskUniforms(mat, layer, maps);
     this.fs.render(this.renderer, mat, dst);
@@ -430,7 +581,8 @@ export class Compositor {
     u.uMaskMode.value = 2;
     u.uGenType.value = GEN_TYPES.indexOf(g.type);
     u.uGen.value.set(g.amount, g.contrast, g.noiseScale, g.noiseAmount);
-    u.uGen2.value.set(g.invert ? 1 : 0, g.axis, g.seed, 0);
+    u.uGen2.value.set(g.invert ? 1 : 0, g.axis, g.seed, g.mapping === 'sphere' ? 1 : 0);
+    u.uGenOffset.value.set(g.offset?.[0] ?? 0, g.offset?.[1] ?? 0);
   }
 
   dispose() {
@@ -450,6 +602,7 @@ function maskUniforms(): Record<string, THREE.IUniform> {
     uGenType: { value: 0 },
     uGen: { value: new THREE.Vector4() },
     uGen2: { value: new THREE.Vector4() },
+    uGenOffset: { value: new THREE.Vector2() },
     uMeshA: { value: null },
     uMeshB: { value: null },
     uExtentRatio: { value: new THREE.Vector3(1, 1, 1) },
