@@ -4,3 +4,5 @@ dist/
 .DS_Store
 release/
 .claude/
+playwright-report/
+test-results/

@@ -1,6 +1,7 @@
 import * as THREE from 'three';
 import { clearTarget, createRT, FullscreenPass, MeshPass, rawMaterial, UV_SPACE_VERT } from './gl';
 import { BVH_FUNCS, projectionMaterial, rayAoMaterial, type HighPoly } from './highPoly';
+import { buildSeamStrips } from './seams';
 import { applyCurvatureGain, DEFAULT_SHARP_ANGLE, meshEdges, setSharpAngle, type PaintMesh } from './meshLoader';
 
 export interface BakeSettings {
@@ -30,6 +31,10 @@ export const DEFAULT_BAKE: BakeSettings = {
  * Texture-space maps derived from the mesh:
  *  - coverage: 1 where a UV triangle covers the texel
  *  - seeds:    jump-flood result; for uncovered texels the UV of the nearest covered texel (used for padding/dilation)
+ *  - twin:     for uncovered texels just outside a UV seam, the UV of the same surface point continued across the
+ *              seam in the other island (a = 1 where set). Lets padding and the height → normal step read across seams.
+ *              It reaches SEAM_TEXELS past the texture's border too (islands often touch it), so it is
+ *              (size + 2·SEAM_TEXELS)² and read through `twinXf`.
  *  - maps (MRT, dilated):
  *      [0] meshA: rgb = position normalised to the bounding box (per axis), a = ambient occlusion
  *      [1] meshB: rgb = world normal * 0.5 + 0.5, a = curvature (0.5 flat, >0.5 convex)
@@ -37,10 +42,38 @@ export const DEFAULT_BAKE: BakeSettings = {
  *      [3] meshD: rgb = baked high-poly normal in that tangent frame (flat without a high poly), a = 1 where projected
  * With a high poly, AO and curvature come from it wherever its projection hit.
  */
+/** Width of the seam strips in texels. */
+const SEAM_TEXELS = 8;
+
+/**
+ * Where to read a texel from: covered texels read themselves; padding just outside a UV seam reads the surface
+ * continued across the seam (uTwin); other padding reads the nearest covered texel (uSeeds). `uv` may lie a few
+ * texels outside 0..1 (a neighbour of a texel on the border). Needs uCov, uSeeds, uTwin and uTwinXf.
+ */
+export const GLSL_REMAP = /* glsl */ `
+vec2 seedOf(vec2 uv) {
+  uv = clamp(uv, 0.0, 1.0);
+  if (texture(uCov, uv).r > 0.5) return uv;
+  vec4 s = texture(uSeeds, uv);
+  return s.x < 0.0 ? uv : s.xy;
+}
+vec2 remap(vec2 uv) {
+  bool inside = all(greaterThanEqual(uv, vec2(0.0))) && all(lessThanEqual(uv, vec2(1.0)));
+  if (inside && texture(uCov, uv).r > 0.5) return uv;
+  vec4 t = texture(uTwin, uv * uTwinXf.x + uTwinXf.y);
+  // The twin can land in the other island's own padding where that island is thinner than the strip.
+  return t.a > 0.5 ? seedOf(t.xy) : seedOf(uv);
+}`;
+
 export class MeshMaps {
   size = 0;
   coverage!: THREE.WebGLRenderTarget;
   seeds!: THREE.WebGLRenderTarget;
+  twin!: THREE.WebGLRenderTarget;
+  /** maps a texture UV to the twin map's UV: twinUv = uv * x + y */
+  twinXf = new THREE.Vector2(1, 0);
+  /** UV seam edges found by the last bake */
+  seamEdges = 0;
   maps!: THREE.WebGLRenderTarget;
   /** bbox extent per axis divided by the largest extent (to rebuild isotropic positions from meshA). */
   extentRatio = new THREE.Vector3(1, 1, 1);
@@ -73,6 +106,28 @@ export class MeshMaps {
      }`,
     { uSrc: { value: null }, uStep: { value: 1 }, uTexel: { value: new THREE.Vector2() } },
   );
+
+  /** Rasterises seam strips (see seams.ts) into the twin map; where strips overlap, the one nearest its seam wins. */
+  private twinMat = (() => {
+    const m = rawMaterial(
+      `in vec2 vTwin; uniform sampler2D uCov; uniform float uPad; layout(location = 0) out vec4 o0;
+       void main(){
+         ivec2 p = ivec2(gl_FragCoord.xy) - ivec2(uPad);
+         ivec2 n = textureSize(uCov, 0);
+         bool inside = p.x >= 0 && p.y >= 0 && p.x < n.x && p.y < n.y;
+         if (inside && texelFetch(uCov, p, 0).r > 0.5) discard;  // only padding texels
+         o0 = vec4(vTwin, 0.0, 1.0);
+       }`,
+      { uCov: { value: null }, uPad: { value: 0 }, uXf: { value: new THREE.Vector2(1, 0) } },
+      {
+        vertex: `in vec3 position; in vec2 twinUv; uniform vec2 uXf; out vec2 vTwin;
+                 void main(){ vTwin = twinUv; gl_Position = vec4((position.xy * uXf.x + uXf.y) * 2.0 - 1.0, position.z * 2.0 - 1.0, 1.0); }`,
+      },
+    );
+    m.depthTest = true;
+    m.depthWrite = true;
+    return m;
+  })();
 
   private rawMat = rawMaterial(
     `in vec3 vPos; in vec3 vNormal; in float vCurv;
@@ -139,11 +194,11 @@ export class MeshMaps {
 
   private combineMat = rawMaterial(
     `in vec2 vUv;
-     uniform sampler2D uRaw0; uniform sampler2D uRaw1; uniform sampler2D uRaw2; uniform sampler2D uAo; uniform sampler2D uCov; uniform sampler2D uSeeds;
+     uniform sampler2D uRaw0; uniform sampler2D uRaw1; uniform sampler2D uRaw2; uniform sampler2D uAo; uniform sampler2D uCov; uniform sampler2D uSeeds; uniform sampler2D uTwin; uniform vec2 uTwinXf;
      uniform bool uHigh; uniform sampler2D uProj0; uniform sampler2D uProj1; uniform sampler2D uProj2; uniform sampler2D uRayAo;
      uniform vec2 uTexel; uniform float uCurvK; uniform sampler2D uEdges;
      layout(location = 0) out vec4 o0; layout(location = 1) out vec4 o1; layout(location = 2) out vec4 o2; layout(location = 3) out vec4 o3;
-     vec2 remap(vec2 uv){ if (texture(uCov, uv).r > 0.5) return uv; vec4 s = texture(uSeeds, uv); return s.x < 0.0 ? uv : s.xy; }
+     ${GLSL_REMAP}
      // Normal of a neighbouring texel, or the centre one where the neighbour has no projection (one-sided difference).
      vec3 nAt(vec2 uv, vec3 c){ vec4 p = texture(uProj1, uv); return p.a > 0.5 && texture(uCov, uv).r > 0.5 ? p.xyz : c; }
      void main(){
@@ -186,6 +241,8 @@ export class MeshMaps {
       uAo: { value: null },
       uCov: { value: null },
       uSeeds: { value: null },
+      uTwin: { value: null },
+      uTwinXf: { value: new THREE.Vector2(1, 0) },
       uHigh: { value: false },
       uProj0: { value: null },
       uProj1: { value: null },
@@ -270,6 +327,9 @@ export class MeshMaps {
     }
     this.seeds = src;
     dst.dispose();
+
+    // 2b. Seam twins: where padding continues across a UV seam.
+    this.bakeTwin(uvGeometry, size);
 
     // 3. Position / normal / curvature
     const bb = mesh.bbox;
@@ -373,13 +433,16 @@ export class MeshMaps {
     c.uProj2.value = proj?.textures[2] ?? null;
     c.uRayAo.value = rayAo?.texture ?? null;
     c.uTexel.value.set(1 / size, 1 / size);
-    c.uCurvK.value = 0.1 * settings.curvatureGain;
+    // The high poly's curvature uses the low poly's per-mesh scale, so both read alike where they meet.
+    c.uCurvK.value = mesh.curvScale * settings.curvatureGain;
     c.uRaw0.value = raw.textures[0];
     c.uRaw1.value = raw.textures[1];
     c.uRaw2.value = raw.textures[2];
     c.uAo.value = aoAcc.texture;
     c.uCov.value = this.coverage.texture;
     c.uSeeds.value = this.seeds.texture;
+    c.uTwin.value = this.twin.texture;
+    c.uTwinXf.value.copy(this.twinXf);
     this.maps = createRT(size, size, { type: THREE.HalfFloatType, count: 4, linear: true });
     this.fs.render(r, this.combineMat, this.maps);
     proj?.dispose();
@@ -390,6 +453,30 @@ export class MeshMaps {
     shadow.dispose();
     r.setRenderTarget(null);
     onProgress?.(1, 'Done');
+  }
+
+  private bakeTwin(uvGeometry: THREE.BufferGeometry, size: number) {
+    const r = this.renderer;
+    const full = size + 2 * SEAM_TEXELS;
+    this.twin = createRT(full, full, { type: THREE.FloatType, depth: true });
+    this.twinXf.set(size / full, SEAM_TEXELS / full);
+    clearTarget(r, this.twin, -1, -1, -1, 0);
+    const pos = uvGeometry.getAttribute('position');
+    const uv = uvGeometry.getAttribute('uv');
+    this.seamEdges = 0;
+    if (!pos || !uv) return;
+    // Wide enough for the normal step's neighbours and for a few mip levels of bleed.
+    const strips = buildSeamStrips(pos.array, uv.array, uvGeometry.index?.array ?? null, SEAM_TEXELS / size);
+    this.seamEdges = strips.seamEdges;
+    if (!strips.seamEdges) return;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.BufferAttribute(strips.position, 3));
+    g.setAttribute('twinUv', new THREE.BufferAttribute(strips.twin, 2));
+    this.twinMat.uniforms.uCov.value = this.coverage.texture;
+    this.twinMat.uniforms.uPad.value = SEAM_TEXELS;
+    this.twinMat.uniforms.uXf.value.copy(this.twinXf);
+    new MeshPass(g).render(r, this.twinMat, this.twin);
+    g.dispose();
   }
 
   get meshATex(): THREE.Texture {
@@ -417,6 +504,10 @@ export class MeshMaps {
     clearTarget(r, this.coverage, 1, 1, 1, 1);
     this.seeds = createRT(size, size, { type: THREE.FloatType });
     clearTarget(r, this.seeds, 0, 0, 0, 0);
+    this.twin = createRT(1, 1, { type: THREE.FloatType });
+    this.twinXf.set(1, 0);
+    clearTarget(r, this.twin, -1, -1, -1, 0);
+    this.seamEdges = 0;
     this.maps = createRT(size, size, { type: THREE.HalfFloatType, count: 4, linear: true });
     clearTarget(r, this.maps, 0.5, 0.5, 0.5, 1);
     r.setRenderTarget(null);
@@ -426,6 +517,7 @@ export class MeshMaps {
     if (!this.size) return;
     this.coverage?.dispose();
     this.seeds?.dispose();
+    this.twin?.dispose();
     this.maps?.dispose();
     this.size = 0;
   }

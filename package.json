@@ -14,12 +14,14 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
     "typecheck": "tsc --noEmit",
-    "test": "node --test tests/archive.test.mjs",
+    "test": "node --test tests/archive.test.mjs tests/skinlab.test.mjs tests/seams.test.mjs tests/curvature.test.mjs tests/decalProjection.test.mjs",
+    "test:e2e": "playwright test",
     "app": "vite build && electron .",
     "dist:win": "npm run build && electron-builder --win --publish never",
     "dist:linux": "npm run build && electron-builder --linux --publish never"
   },
   "devDependencies": {
+    "@playwright/test": "^1.56.1",
     "@types/three": "^0.186.0",
     "electron": "44.4.5",
     "electron-builder": "26.16.1",

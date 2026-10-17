@@ -30,7 +30,8 @@ import { zipSync } from 'fflate';
 import { Viewport } from './engine/viewport';
 import { FacePicker, FaceSelection, subsetGeometry, type FaceMode, type TriRange } from './engine/faceSelect';
 import { SmartPreviews } from './engine/smartPreview';
-import { makeDecal, type DecalResult } from './engine/decals';
+import { makeDecal, type Decal, type DecalResult } from './engine/decals';
+import { placeProjection, type SurfaceSamples, type DecalProjection, type Vec3 } from './engine/decalProjection';
 import { disposeMeshEdges, loadMeshSource } from './engine/meshLoader';
 import { MATERIALS, type MaterialPreset, type SmartLayerSpec, type SmartMaterial } from './data/materials';
 import { importTextureSet, Library, makeAsset, mapTextureIds, TextureStore } from './engine/library';
@@ -42,12 +43,32 @@ import { builtinTipTexture, importTipImage } from './engine/brushTips';
  */
 export type Tool = 'paint' | 'erase' | 'select' | 'decal';
 
+/** A projected decal waiting for its spot (see App.startProjectionPlacement). */
+export interface PendingProjection {
+  /** texture id of the image (a decal's colour image) */
+  image: string;
+  name: string;
+  mapping: DecalProjection['mapping'];
+  /** image height in model units (1 = the model's longest side) */
+  size: number;
+  ink: [number, number, number];
+  useImageColor: boolean;
+  opacity: number;
+  /** move this existing projected decal layer instead of adding a new one */
+  layerId?: number;
+}
+
 /** Decal tool settings. Roughness / metallic come from the brush values when enabled. */
 export interface DecalSettings {
   id: string | null;
   /** how far the decal's relief raises the surface (0 = flat, 0.5 = full height range) */
   depth: number;
   channels: { color: boolean; roughness: boolean; metallic: boolean; height: boolean };
+  /** 'stamp' paints into the selected layer; 'wrap' / 'flat' add a layer that projects the decal (decalProjection.ts) */
+  placement: 'stamp' | DecalProjection['mapping'];
+  /** projected decals: the image's shape in one ink colour (tattoos) instead of its own colours */
+  ink: boolean;
+  inkColor: [number, number, number];
 }
 export type ChangeKind = 'layers' | 'selection' | 'brush' | 'mesh' | 'view' | 'history' | 'settings' | 'tool' | 'autosave' | 'stencil' | 'set' | 'gpu' | 'faces';
 
@@ -138,7 +159,15 @@ export class App {
   activeSet = 0;
   private emptySet: TextureSet;
   tool: Tool = 'paint';
-  decal: DecalSettings = { id: null, depth: 0.2, channels: { color: true, roughness: true, metallic: false, height: true } };
+  decal: DecalSettings = {
+    id: null,
+    depth: 0.2,
+    channels: { color: true, roughness: true, metallic: false, height: true },
+    placement: 'stamp',
+    ink: false,
+    // Blue-black, like aged tattoo ink seen through skin.
+    inkColor: [0.07, 0.08, 0.11],
+  };
   bake: BakeSettings = { ...DEFAULT_BAKE };
   /** optional high-poly reference: projected into the baked normal / AO / curvature maps */
   highPoly: HighPoly | null = null;
@@ -914,6 +943,7 @@ export class App {
       values: { ...src.values, color: [...src.values.color] as [number, number, number] },
       channels: { ...src.channels },
       maps: src.maps ? cloneMaps(src.maps) : null,
+      projection: src.projection ? structuredClone(src.projection) : null,
     };
   }
 
@@ -1143,7 +1173,11 @@ export class App {
     const tip = this.library.tips.find((t) => t.id === this.brush.tip);
     if (tip) ids.add(tip.assetId);
     for (const s of this.sets) {
-      for (const l of walkLayers(s.layers)) if (l.kind === 'fill') mapTextureIds(l.maps).forEach((i) => ids.add(i));
+      for (const l of walkLayers(s.layers)) {
+        if (l.kind !== 'fill') continue;
+        mapTextureIds(l.maps).forEach((i) => ids.add(i));
+        if (l.projection) ids.add(l.projection.image);
+      }
     }
     return [...ids];
   }
@@ -1176,7 +1210,7 @@ export class App {
    * Turns images into decal brushes (background removal, trimming and a height map are automatic) and selects the
    * last one with the decal tool.
    */
-  async importDecals(files: { name: string; bytes: Uint8Array }[]): Promise<number> {
+  async importDecals(files: { name: string; bytes: Uint8Array }[], useAsBrush = true): Promise<Decal[]> {
     const done: DecalResult[] = [];
     const failed: string[] = [];
     this.setProgress(true, 'Making decals', 0);
@@ -1195,7 +1229,7 @@ export class App {
     } finally {
       this.setProgress(false);
     }
-    if (done.length) {
+    if (done.length && useAsBrush) {
       this.decal.id = done[done.length - 1].decal.id;
       this.setTool('decal');
       this.emit('brush');
@@ -1209,7 +1243,136 @@ export class App {
       );
     }
     if (failed.length) this.toast(`Could not make a decal from ${failed.join(', ')}`, 'warn');
-    return done.length;
+    return done.map((r) => r.decal);
+  }
+
+  // ---------------------------------------------------------------- projected decals
+  /** A projected decal waiting for its spot: the next click on the model places it (input.ts), Esc cancels. */
+  pendingProjection: PendingProjection | null = null;
+  private surfaceCache: { mesh: PaintMesh; range: TriRange; samples: SurfaceSamples } | null = null;
+
+  startProjectionPlacement(p: PendingProjection) {
+    if (!this.mesh) {
+      this.toast('Open a model first.', 'warn');
+      return;
+    }
+    if (this.uvView) this.setUVView(false);
+    this.pendingProjection = p;
+    this.emit('tool');
+    this.toast('Click the model where the decal goes (Esc cancels).');
+  }
+
+  cancelProjectionPlacement() {
+    if (!this.pendingProjection) return;
+    this.pendingProjection = null;
+    this.emit('tool');
+  }
+
+  /** Compositor model units (see decalProjection.ts) of a point in the normalised geometry. */
+  private modelUnits(v: THREE.Vector3): Vec3 {
+    const bb = this.mesh!.bbox;
+    const ext = bb.getSize(new THREE.Vector3());
+    const k = Math.max(ext.x, ext.y, ext.z, 1e-4);
+    return [(v.x - bb.min.x) / k, (v.y - bb.min.y) / k, (v.z - bb.min.z) / k];
+  }
+
+  /** The active set's vertices in model units, for fitting a projected decal to the limb it is placed on. */
+  private surfaceSamples(): SurfaceSamples {
+    const mesh = this.mesh!;
+    const range = this.faceRange;
+    const c = this.surfaceCache;
+    if (c && c.mesh === mesh && c.range[0] === range[0] && c.range[1] === range[1]) return c.samples;
+    const pos = mesh.geometry.getAttribute('position');
+    const nrm = mesh.geometry.getAttribute('normal');
+    const n = (range[1] - range[0]) * 3;
+    const positions = new Float32Array(n * 3), normals = new Float32Array(n * 3);
+    const v = new THREE.Vector3();
+    for (let i = 0; i < n; i++) {
+      const src = range[0] * 3 + i;
+      positions.set(this.modelUnits(v.fromBufferAttribute(pos, src)), i * 3);
+      normals.set([nrm.getX(src), nrm.getY(src), nrm.getZ(src)], i * 3);
+    }
+    this.surfaceCache = { mesh, range, samples: { positions, normals } };
+    return this.surfaceCache.samples;
+  }
+
+  /**
+   * Places the pending decal where drawing-buffer pixel (x, y) (origin bottom-left) hits the active set: wrapped
+   * around the limb found there, or flat along the surface. With a radius `r` (drawing-buffer pixels) and rotation
+   * `rot` (radians, counter-clockwise on screen) it gets the size and angle it has on screen, as a stamp would.
+   * Returns false (with a message) when nothing was hit.
+   */
+  placeProjectionAt(x: number, y: number, r?: number, rot = 0): boolean {
+    const p = this.pendingProjection;
+    if (!p || !this.mesh) return false;
+    const tri = this.pickFace(x, y);
+    if (tri < 0) {
+      this.toast('Click on the model, on the texture set you are painting.', 'warn');
+      return false;
+    }
+    const g = this.mesh.geometry;
+    const pos = g.getAttribute('position'), nrm = g.getAttribute('normal');
+    const corner = (k: number) => new THREE.Vector3().fromBufferAttribute(pos, tri * 3 + k);
+    const [a, b, c] = [corner(0), corner(1), corner(2)];
+    const canvas = this.viewport.canvas;
+    const caster = new THREE.Raycaster();
+    caster.setFromCamera(new THREE.Vector2((x / canvas.width) * 2 - 1, (y / canvas.height) * 2 - 1), this.viewport.activeCamera);
+    const hit = caster.ray.intersectTriangle(a, b, c, false, new THREE.Vector3()) ?? a.clone().add(b).add(c).divideScalar(3);
+    const w = new THREE.Triangle(a, b, c).getBarycoord(hit, new THREE.Vector3()) ?? new THREE.Vector3(1 / 3, 1 / 3, 1 / 3);
+    const n = new THREE.Vector3();
+    for (let k = 0; k < 3; k++) n.addScaledVector(new THREE.Vector3().fromBufferAttribute(nrm, tri * 3 + k), w.getComponent(k));
+    if (n.lengthSq() < 1e-12) new THREE.Triangle(a, b, c).getNormal(n);
+    n.normalize();
+    if (n.dot(caster.ray.direction) > 0) n.negate();
+    let size = p.size;
+    if (r !== undefined) {
+      // World size of one drawing-buffer pixel at the hit, in model units (1 = the model's longest side).
+      const cam = this.viewport.activeCamera;
+      let perPixel: number;
+      if (cam instanceof THREE.PerspectiveCamera) {
+        const depth = hit.clone().sub(cam.position).dot(cam.getWorldDirection(new THREE.Vector3()));
+        perPixel = (2 * depth * Math.tan(THREE.MathUtils.degToRad(cam.fov) / 2)) / canvas.height;
+      } else {
+        const o = cam as THREE.OrthographicCamera;
+        perPixel = (o.top - o.bottom) / o.zoom / canvas.height;
+      }
+      const ext = this.mesh.bbox.getSize(new THREE.Vector3());
+      size = (2 * r * perPixel) / Math.max(ext.x, ext.y, ext.z, 1e-4);
+    }
+    const middle = this.modelUnits(this.mesh.bbox.getCenter(new THREE.Vector3()));
+    const t = placeProjection(p.image, p.mapping, this.modelUnits(hit), [n.x, n.y, n.z], this.surfaceSamples(), size, 1, [0, 1, 0], middle);
+    t.useImageColor = p.useImageColor;
+    if (r !== undefined) {
+      // As the cursor preview shows it: the image's up turned onto the screen's up, then the drag angle on top.
+      const up = new THREE.Vector3().fromArray(t.mapping === 'wrap' ? t.axis : t.front);
+      const screenUp = new THREE.Vector3().setFromMatrixColumn(this.viewport.activeCamera.matrixWorld, 1);
+      const tangent = (v: THREE.Vector3) => v.addScaledVector(n, -v.dot(n)).normalize();
+      tangent(up);
+      tangent(screenUp);
+      const turn = Math.atan2(new THREE.Vector3().crossVectors(up, screenUp).dot(n), up.dot(screenUp));
+      t.rotation = THREE.MathUtils.radToDeg(turn + rot);
+    }
+    this.pendingProjection = null;
+    this.emit('tool');
+
+    const loc = p.layerId === undefined ? null : locateLayer(this.layers, p.layerId);
+    const old = loc?.layer.kind === 'fill' ? loc.layer : null;
+    if (old?.projection) {
+      // Moved: keeps its look (image, size, rotation, colours), takes the new spot and fit.
+      old.projection = { ...old.projection, mapping: t.mapping, center: t.center, axis: t.axis, front: t.front, radius: t.radius, reach: t.reach };
+      this.selectedId = old.id;
+      this.part = 'content';
+      this.invalidate();
+      this.commitLayers('Move decal');
+      this.emit('layers');
+      this.emit('selection');
+      return true;
+    }
+    const l = createFillLayer(p.name, { color: [...p.ink], roughness: 0.5, metallic: 0, height: 0.5 }, { roughness: false, metallic: false, height: false });
+    l.opacity = p.opacity;
+    l.projection = t;
+    this.insertAboveSelected('Add projected decal', l);
+    return true;
   }
 
   /**
@@ -1222,6 +1385,26 @@ export class App {
     if (!d) {
       this.toast('Pick a decal first (Decals tab in the shelf), or import images as decals.', 'warn');
       return false;
+    }
+    // Projected placement adds its own layer; a mask is always stamped.
+    const s = this.decal;
+    if (s.placement !== 'stamp' && !(this.part === 'mask' && l?.mask)) {
+      if (this.uvView) {
+        this.toast('Wrapped and projected decals are placed in the 3D view.', 'warn');
+        return false;
+      }
+      this.pendingProjection = {
+        image: d.maskId,
+        name: `Decal ${d.name}`,
+        mapping: s.placement,
+        size: 0.08,
+        ink: [...s.inkColor],
+        useImageColor: !s.ink,
+        opacity: this.brush.opacity,
+      };
+      const ok = this.placeProjectionAt(x, y, r, rot);
+      this.pendingProjection = null;
+      return ok;
     }
     const reason = this.paintBlockedReason();
     if (!l || reason) {

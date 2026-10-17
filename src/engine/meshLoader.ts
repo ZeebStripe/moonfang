@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { mergeGeometries } from 'three/examples/jsm/utils/BufferGeometryUtils.js';
 import type { MeshBVHUniformStruct } from 'three-mesh-bvh';
-import { autoSmoothCurvature, buildTopology, segmentBVH, sharpEdges, type Topology } from './meshAnalysis';
+import { autoSmoothCurvature, buildTopology, curvaturePercentile, segmentBVH, sharpEdges, type Topology } from './meshAnalysis';
 
 export type MeshSource =
   | { kind: 'demo'; id: DemoMeshId }
@@ -20,6 +20,8 @@ export interface PaintMesh {
   curvRaw: Float32Array;
   /** sharp-edge angle curvRaw was computed with */
   curvAngle: number;
+  /** raw curvature → tanh argument at gain 1 (see curvatureScale) */
+  curvScale: number;
   topology: Topology;
   /** GPU distance sources for the sharp convex / concave edges at `angle` (see meshEdges) */
   edgeCache?: { angle: number; convex: MeshBVHUniformStruct; concave: MeshBVHUniformStruct; count: number };
@@ -227,8 +229,9 @@ function buildPaintMesh(name: string, geometry: THREE.BufferGeometry, source: Me
   const topology = buildTopology(g);
   const curvAngle = DEFAULT_SHARP_ANGLE;
   const curvRaw = autoSmoothCurvature(topology, curvAngle);
+  const curvScale = curvatureScale(topology, curvRaw);
   g.setAttribute('curv', new THREE.BufferAttribute(new Float32Array(curvRaw.length), 1));
-  const mesh: PaintMesh = { name, geometry: g, source, center, scale, bbox: g.boundingBox!.clone(), curvRaw, curvAngle, topology, warnings, sets };
+  const mesh: PaintMesh = { name, geometry: g, source, center, scale, bbox: g.boundingBox!.clone(), curvRaw, curvAngle, curvScale, topology, warnings, sets };
   applyCurvatureGain(mesh, 1);
   return mesh;
 }
@@ -239,6 +242,7 @@ export const DEFAULT_SHARP_ANGLE = 35;
 export function setSharpAngle(mesh: PaintMesh, angle: number) {
   if (mesh.curvAngle === angle) return;
   mesh.curvRaw = autoSmoothCurvature(mesh.topology, angle);
+  mesh.curvScale = curvatureScale(mesh.topology, mesh.curvRaw);
   mesh.curvAngle = angle;
 }
 
@@ -258,10 +262,21 @@ export function disposeMeshEdges(mesh: PaintMesh) {
   mesh.edgeCache = undefined;
 }
 
+/**
+ * Raw curvature → tanh argument at gain 1. Normally 0.1 (curvature 10, a radius of 0.1 of the normalised mesh, maps
+ * to tanh(1)). Meshes curved almost everywhere (characters: thin limbs, fingers, coarse creases) would clip to black /
+ * white with that, so their scale drops until the 98th area percentile maps to tanh(1.6). Never raised, so
+ * hard-surface meshes (curvature only along their rounded edges) keep the fixed scale.
+ */
+export function curvatureScale(topo: Topology, curvRaw: Float32Array): number {
+  const p98 = curvaturePercentile(topo, curvRaw, 0.98);
+  return p98 > 0 ? Math.min(0.1, 1.6 / p98) : 0.1;
+}
+
 /** Maps raw curvature to 0..1 (0.5 = flat, >0.5 convex) with a soft tanh curve. */
 export function applyCurvatureGain(mesh: PaintMesh, gain: number) {
   const attr = mesh.geometry.attributes.curv as THREE.BufferAttribute;
-  const k = 0.1 * gain;
+  const k = mesh.curvScale * gain;
   for (let i = 0; i < mesh.curvRaw.length; i++) attr.setX(i, 0.5 + 0.5 * Math.tanh(mesh.curvRaw[i] * k));
   attr.needsUpdate = true;
 }

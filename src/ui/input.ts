@@ -45,6 +45,23 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
   let smooth: { x: number; y: number } | null = null;
   let lastDir = 0;
 
+  // Placing a projected decal again (Properties → Place again): one click on the model, before any tool.
+  // Registered first, in the capture phase, so neither the paint tools nor the orbit controls see that click.
+  wrap.addEventListener(
+    'pointerdown',
+    (e) => {
+      if (!app.pendingProjection || e.button !== 0 || e.altKey || e.target !== canvas) return;
+      // Immediate: the paint listener sits on this same element.
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      const b = toBuffer(e);
+      app.placeProjectionAt(b.x, b.y);
+    },
+    true,
+  );
+  window.addEventListener('keydown', (e) => e.key === 'Escape' && app.pendingProjection && app.cancelProjectionPlacement());
+  app.on((k) => k === 'tool' && wrap.classList.toggle('placing-decal', !!app.pendingProjection));
+
   /** One stamp with the brush dynamics (size/angle/opacity jitter, scatter, follow-stroke rotation) applied. */
   function stamp(x: number, y: number, radius: number, alpha: number, dir: number): Stamp {
     const b = app.brush;
@@ -141,7 +158,7 @@ export function bindViewportInput(app: App, wrap: HTMLElement, cursor: HTMLEleme
   });
 
   function updateCursor(e?: PointerEvent) {
-    const show = hover && !altDown && !!app.mesh && !resize && app.tool !== 'select' && app.tool !== 'decal';
+    const show = hover && !altDown && !!app.mesh && !resize && !app.pendingProjection && app.tool !== 'select' && app.tool !== 'decal';
     cursor.style.display = show ? 'block' : 'none';
     if (!e) return;
     const r = wrap.getBoundingClientRect();
