@@ -1,7 +1,7 @@
 {
   "name": "moonfang",
   "productName": "Moonfang 3D",
-  "version": "0.1.1-beta",
+  "version": "0.1.2-beta",
   "private": true,
   "description": "Open source 3D texture painting tool (PBR layer painting, mesh-map baking, smart materials)",
   "author": "ZeebStripe",
