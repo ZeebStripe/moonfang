@@ -3,8 +3,8 @@
 How Moonfang is built, why, and what comes next. The [README](../README.md) describes features for users; this
 document is for whoever works on the code. Paths are relative to the repository root.
 
-Status: **Beta 0.1.1**. The Skin Lab and UV seam bridges (sections 5 and 6) are on the `claude/skinlab-seams` branch
-and not released yet. Bake cages (section 8) are planned, not started.
+Status: **Beta 0.1.2**. The Skin Lab and UV seam bridges (sections 5 and 6) are released in 0.1.2. Bake cages
+(section 8) are planned, not started.
 
 ## Contents
 

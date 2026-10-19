@@ -31,7 +31,7 @@ body:
     attributes:
       label: Moonfang version
       description: Help → About Moonfang
-      placeholder: Beta 0.1.1
+      placeholder: Beta 0.1.2
     validations:
       required: true
   - type: dropdown
